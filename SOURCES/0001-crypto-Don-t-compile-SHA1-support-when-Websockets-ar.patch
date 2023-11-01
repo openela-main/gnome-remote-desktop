@@ -1,0 +1,92 @@
+From fdc71dd25c8505b3580e70afd4b4213cad8f8ebb Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Mon, 25 Oct 2021 16:14:26 +0200
+Subject: [PATCH] crypto: Don't compile SHA1 support when Websockets are
+ disabled
+
+SHA1 is not ideal, security wise. Let's make sure we don't even have it
+compiled when nothing depends on it, e.g. Websockets.
+---
+ common/crypto.h           | 2 ++
+ common/crypto_included.c  | 2 ++
+ common/crypto_libgcrypt.c | 2 ++
+ common/crypto_openssl.c   | 2 ++
+ 4 files changed, 8 insertions(+)
+
+diff --git a/common/crypto.h b/common/crypto.h
+index 04be9304..c1f32194 100644
+--- a/common/crypto.h
++++ b/common/crypto.h
+@@ -11,7 +11,9 @@
+ int hash_md5(void *out, const void *in, const size_t in_len);
+ 
+ /* Generates an SHA1 hash of 'in' and writes it to 'out', which must be 20 bytes in size. */
++#ifdef LIBVNCSERVER_WITH_WEBSOCKETS
+ int hash_sha1(void *out, const void *in, const size_t in_len);
++#endif
+ 
+ /* Fill 'out' with 'len' random bytes. */
+ void random_bytes(void *out, size_t len);
+diff --git a/common/crypto_included.c b/common/crypto_included.c
+index b359336f..cf8d43c2 100644
+--- a/common/crypto_included.c
++++ b/common/crypto_included.c
+@@ -33,6 +33,7 @@ int hash_md5(void *out, const void *in, const size_t in_len)
+     return 0;
+ }
+ 
++#ifdef LIBVNCSERVER_WITH_WEBSOCKETS
+ int hash_sha1(void *out, const void *in, const size_t in_len)
+ {
+     SHA1Context sha1;
+@@ -45,6 +46,7 @@ int hash_sha1(void *out, const void *in, const size_t in_len)
+ 
+     return 1;
+ }
++#endif /* LIBVNCSERVER_WITH_WEBSOCKETS */
+ 
+ void random_bytes(void *out, size_t len)
+ {
+diff --git a/common/crypto_libgcrypt.c b/common/crypto_libgcrypt.c
+index 34d845b4..f62bdaf8 100644
+--- a/common/crypto_libgcrypt.c
++++ b/common/crypto_libgcrypt.c
+@@ -74,6 +74,7 @@ int hash_md5(void *out, const void *in, const size_t in_len)
+     return result;
+ }
+ 
++#ifdef LIBVNCSERVER_WITH_WEBSOCKETS
+ int hash_sha1(void *out, const void *in, const size_t in_len)
+ {
+     int result = 0;
+@@ -98,6 +99,7 @@ int hash_sha1(void *out, const void *in, const size_t in_len)
+     gcry_md_close(sha1);
+     return result;
+ }
++#endif /* LIBVNCSERVER_WITH_WEBSOCKETS */
+ 
+ void random_bytes(void *out, size_t len)
+ {
+diff --git a/common/crypto_openssl.c b/common/crypto_openssl.c
+index 60d4bd4d..9816eb04 100644
+--- a/common/crypto_openssl.c
++++ b/common/crypto_openssl.c
+@@ -49,6 +49,7 @@ int hash_md5(void *out, const void *in, const size_t in_len)
+     return 1;
+ }
+ 
++#ifdef LIBVNCSERVER_WITH_WEBSOCKETS
+ int hash_sha1(void *out, const void *in, const size_t in_len)
+ {
+     SHA_CTX sha1;
+@@ -60,6 +61,7 @@ int hash_sha1(void *out, const void *in, const size_t in_len)
+ 	return 0;
+     return 1;
+ }
++#endif /* LIBVNCSERVER_WITH_WEBSOCKETS */
+ 
+ void random_bytes(void *out, size_t len)
+ {
+-- 
+2.31.1
+
