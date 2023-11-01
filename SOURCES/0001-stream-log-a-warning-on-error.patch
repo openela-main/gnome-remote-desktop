@@ -1,0 +1,52 @@
+From 7670167e578eb5c6e032cff38112edf85df142ee Mon Sep 17 00:00:00 2001
+From: Wim Taymans <wtaymans@redhat.com>
+Date: Tue, 16 Jun 2020 11:44:52 +0200
+Subject: [PATCH 1/2] stream: log a warning on error
+
+When we get an invalid buffer or we can't mmap() it, log a warning
+and exit instead of carying on with invalid pointers and segfault.
+---
+ src/grd-vnc-pipewire-stream.c | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/src/grd-vnc-pipewire-stream.c b/src/grd-vnc-pipewire-stream.c
+index 261292a..91fb0a1 100644
+--- a/src/grd-vnc-pipewire-stream.c
++++ b/src/grd-vnc-pipewire-stream.c
+@@ -323,14 +323,18 @@ process_buffer (GrdVncPipeWireStream *stream,
+ 
+   if (buffer->datas[0].chunk->size == 0)
+     {
+-      size = 0;
+-      map = NULL;
+-      src_data = NULL;
++      g_warning ("Received empty buffer");
++      return NULL;
+     }
+   else if (buffer->datas[0].type == SPA_DATA_MemFd)
+     {
+       size = buffer->datas[0].maxsize + buffer->datas[0].mapoffset;
+       map = mmap (NULL, size, PROT_READ, MAP_PRIVATE, buffer->datas[0].fd, 0);
++      if (map == MAP_FAILED)
++        {
++          g_warning ("Failed to mmap buffer: %s", g_strerror (errno));
++          return NULL;
++	}
+       src_data = SPA_MEMBER (map, buffer->datas[0].mapoffset, uint8_t);
+     }
+   else if (buffer->datas[0].type == SPA_DATA_DmaBuf)
+@@ -341,6 +345,11 @@ process_buffer (GrdVncPipeWireStream *stream,
+       size = buffer->datas[0].maxsize + buffer->datas[0].mapoffset;
+ 
+       map = mmap (NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
++      if (map == MAP_FAILED)
++        {
++          g_warning ("Failed to mmap DMA buffer: %s", g_strerror (errno));
++          return NULL;
++	}
+       sync_dma_buf (fd, DMA_BUF_SYNC_START);
+ 
+       src_data = SPA_MEMBER (map, buffer->datas[0].mapoffset, uint8_t);
+-- 
+2.26.2
+

@@ -1,0 +1,25 @@
+From 240d8694fbcdeb020e7f9c0f8f292a4679b88b30 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Thu, 18 Jun 2020 13:14:04 +0200
+Subject: [PATCH] vnc/pipewire-stream: Remove assert
+
+Handle lack of frames gracefully.
+---
+ src/grd-vnc-pipewire-stream.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/src/grd-vnc-pipewire-stream.c b/src/grd-vnc-pipewire-stream.c
+index ee8ad5d..a3f5fb6 100644
+--- a/src/grd-vnc-pipewire-stream.c
++++ b/src/grd-vnc-pipewire-stream.c
+@@ -463,7 +463,6 @@ on_stream_process (void *user_data)
+ 
+   frame = process_buffer (stream, buffer->buffer);
+ 
+-  g_assert (frame);
+   g_mutex_lock (&stream->frame_mutex);
+   if (stream->pending_frame)
+     {
+-- 
+2.26.2
+
