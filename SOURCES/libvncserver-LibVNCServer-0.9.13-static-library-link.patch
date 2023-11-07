@@ -1,0 +1,47 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 0b6228a..20fec85 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -495,7 +495,7 @@ if(WIN32)
+   endif(WITH_TIGHTVNC_FILETRANSFER)
+ endif(WIN32)
+ 
+-target_link_libraries(vncclient
++target_link_libraries(vncclient PUBLIC
+                       ${ADDITIONAL_LIBS}
+                       ${ZLIB_LIBRARIES}
+                       ${LZO_LIBRARIES}
+@@ -504,7 +504,7 @@ target_link_libraries(vncclient
+                       ${GNUTLS_LIBRARIES}
+                       ${OPENSSL_LIBRARIES}
+ )
+-target_link_libraries(vncserver
++target_link_libraries(vncserver PUBLIC
+                       ${ADDITIONAL_LIBS}
+                       ${ZLIB_LIBRARIES}
+                       ${LZO_LIBRARIES}
+diff --git a/libvncclient.pc.cmakein b/libvncclient.pc.cmakein
+index ceeda39..f131dca 100644
+--- a/libvncclient.pc.cmakein
++++ b/libvncclient.pc.cmakein
+@@ -8,7 +8,6 @@ Description: A library for easy implementation of a VNC client.
+ Version: @LibVNCServer_VERSION@
+ Requires:
+ Requires.private:
+-Libs: -L${libdir} -lvncclient
+-Libs.private: @PRIVATE_LIBS@
++Libs: -L${libdir} -lvncclient @PRIVATE_LIBS@
+ Cflags: -I${includedir}
+ 
+diff --git a/libvncserver.pc.cmakein b/libvncserver.pc.cmakein
+index 33ec668..5ae98c9 100644
+--- a/libvncserver.pc.cmakein
++++ b/libvncserver.pc.cmakein
+@@ -8,6 +8,5 @@ Description: A library for easy implementation of a VNC server.
+ Version: @LibVNCServer_VERSION@
+ Requires:
+ Requires.private:
+-Libs: -L${libdir} -lvncserver
+-Libs.private: @PRIVATE_LIBS@
++Libs: -L${libdir} -lvncserver @PRIVATE_LIBS@
+ Cflags: -I${includedir}
