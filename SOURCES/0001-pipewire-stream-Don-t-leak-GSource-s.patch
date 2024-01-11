@@ -1,0 +1,53 @@
+From 2fba1c597f272516759933ee439e6fef3f6142f3 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Tue, 6 Apr 2021 11:32:14 +0200
+Subject: [PATCH] pipewire-stream: Don't leak GSource's
+
+The pipewire loop is owned by the source, and failing to free it means
+pipewire will keep file descriptors open indefinitely.
+
+While we properly "destroy":ed the source, destroying it only removes it
+from the context, it doesn't destroy or unref it. To also free it, we
+also need to unref it.
+---
+ src/grd-rdp-pipewire-stream.c | 6 +++++-
+ src/grd-vnc-pipewire-stream.c | 6 +++++-
+ 2 files changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/src/grd-rdp-pipewire-stream.c b/src/grd-rdp-pipewire-stream.c
+index 09015e7..6c79312 100644
+--- a/src/grd-rdp-pipewire-stream.c
++++ b/src/grd-rdp-pipewire-stream.c
+@@ -577,7 +577,11 @@ grd_rdp_pipewire_stream_finalize (GObject *object)
+ 
+   g_clear_pointer (&stream->pipewire_core, pw_core_disconnect);
+   g_clear_pointer (&stream->pipewire_context, pw_context_destroy);
+-  g_clear_pointer (&stream->pipewire_source, g_source_destroy);
++  if (stream->pipewire_source)
++    {
++      g_source_destroy (stream->pipewire_source);
++      g_clear_pointer (&stream->pipewire_source, g_source_unref);
++    }
+ 
+   G_OBJECT_CLASS (grd_rdp_pipewire_stream_parent_class)->finalize (object);
+ }
+diff --git a/src/grd-vnc-pipewire-stream.c b/src/grd-vnc-pipewire-stream.c
+index 82ceb9b..5085062 100644
+--- a/src/grd-vnc-pipewire-stream.c
++++ b/src/grd-vnc-pipewire-stream.c
+@@ -594,7 +594,11 @@ grd_vnc_pipewire_stream_finalize (GObject *object)
+ 
+   g_clear_pointer (&stream->pipewire_core, pw_core_disconnect);
+   g_clear_pointer (&stream->pipewire_context, pw_context_destroy);
+-  g_clear_pointer (&stream->pipewire_source, g_source_destroy);
++  if (stream->pipewire_source)
++    {
++      g_source_destroy (stream->pipewire_source);
++      g_clear_pointer (&stream->pipewire_source, g_source_unref);
++    }
+ 
+   G_OBJECT_CLASS (grd_vnc_pipewire_stream_parent_class)->finalize (object);
+ }
+-- 
+2.31.1
+
