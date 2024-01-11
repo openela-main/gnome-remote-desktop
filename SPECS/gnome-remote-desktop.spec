@@ -15,7 +15,7 @@
 
 Name:           gnome-remote-desktop
 Version:        40.0
-Release:        7%{?dist}
+Release:        10%{?dist}
 Summary:        GNOME Remote Desktop screen share service
 
 License:        GPLv2+
@@ -29,9 +29,6 @@ Patch0:         gnutls-anontls.patch
 
 # Backport upstream leak fix (rhbz#1951129)
 Patch1:         0001-pipewire-stream-Don-t-leak-GSource-s.patch
-
-## LibVNCServer patches required for bundling
-Patch100:       0001-build-Set-rpath-on-executable.patch
 
 ### LibVNCServer patches
 ## TLS security type enablement patches
@@ -51,6 +48,7 @@ Patch1004: 0001-libvncserver-don-t-NULL-out-internal-of-the-default-.patch
 
 ## downstream patches
 Patch2000: libvncserver-LibVNCServer-0.9.13-system-crypto-policy.patch
+Patch2001: libvncserver-LibVNCServer-0.9.13-static-library-link.patch
 
 ## Don't compile SHA1 support
 Patch2100: 0001-crypto-Don-t-compile-SHA1-support-when-Websockets-ar.patch
@@ -108,6 +106,8 @@ GNOME desktop environment.
 %patch1003 -p1 -b .pointers
 %patch1004 -p1 -b .cursor_null
 %patch2000 -p1 -b .crypto_policy
+%patch2001 -p1 -b .static
+%patch2100 -p1 -b .no-sha1
 
 # Nuke bundled minilzo
 rm -fv common/lzodefs.h common/lzoconf.h commmon/minilzo.h common/minilzo.c
@@ -125,9 +125,6 @@ done
 %setup -n %{name}-%{tarball_version}
 %patch0 -p1
 %patch1 -p1
-%if 0%{?bundle_libvncserver}
-%patch100 -p1
-%endif
 
 
 %build
@@ -145,7 +142,7 @@ mkdir -p %{_builddir}/libvncserver/
   -DSYSCONF_INSTALL_DIR=%{libvncserver_install_dir}/etc \
   -DWITH_FFMPEG=OFF -DWITH_GTK=OFF -DWITH_OPENSSL=OFF -DWITH_GNUTLS=ON \
   -DWITH_SDL=OFF -DWITH_X11=OFF -DWITH_WEBSOCKETS=OFF \
-  -DLIBVNCSERVER_WITH_WEBSOCKETS=OFF
+  -DLIBVNCSERVER_WITH_WEBSOCKETS=OFF -DBUILD_SHARED_LIBS=OFF
 %cmake_build
 %__cmake --install "%{__cmake_builddir}"
 popd
@@ -172,8 +169,6 @@ popd
 
 %if 0%{?bundle_libvncserver}
 pushd ../libvncserver-%{libvncserver_name}-%{libvncserver_version}
-mkdir -p %{buildroot}/%{_libdir}/gnome-remote-desktop/
-cp %{__cmake_builddir}/libvncserver.so.1 %{buildroot}/%{_libdir}/gnome-remote-desktop/
 cp COPYING %{_builddir}/%{name}-%{tarball_version}/COPYING.libvncserver
 popd
 %endif
@@ -198,15 +193,24 @@ popd
 %endif
 %doc README
 %{_libexecdir}/gnome-remote-desktop-daemon
-%if 0%{?bundle_libvncserver}
-%{_libdir}/gnome-remote-desktop/libvncserver.so.1
-%endif
 %{_userunitdir}/gnome-remote-desktop.service
 %{_datadir}/glib-2.0/schemas/org.gnome.desktop.remote-desktop.gschema.xml
 %{_datadir}/glib-2.0/schemas/org.gnome.desktop.remote-desktop.enums.xml
 
 
 %changelog
+* Wed Jul 19 2023 Jonas Ådahl <jadahl@redhat.com> - 40.0-10
+- Don't compile in SHA1 support again
+  Resolves: #2223925
+
+* Wed Jul 19 2023 Jonas Ådahl <jadahl@redhat.com> - 40.0-9
+- Bump version number
+  Related: rhbz#2188174
+
+* Wed Apr 19 2023 Yaakov Selkowitz <yselkowi@redhat.com> - 40.0-8
+- Do not provide libvncserver.so.1
+  Resolves: rhbz#2188174
+
 * Mon Oct 25 2021 Jonas Ådahl <jadahl@redhat.com> - 40.0-7
 - Don't compile in SHA1 support
   Resolves: #1936594
