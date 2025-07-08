@@ -1,0 +1,1343 @@
+From 0c74768d784c754af807eb6c38a8b722ed1a90d5 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Mon, 26 May 2025 16:09:45 +0200
+Subject: [PATCH 1/7] daemon: Use GError auto pointer
+
+---
+ src/grd-daemon.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/src/grd-daemon.c b/src/grd-daemon.c
+index 576cb4bb..b164e6ae 100644
+--- a/src/grd-daemon.c
++++ b/src/grd-daemon.c
+@@ -346,7 +346,7 @@ main (int argc, char **argv)
+   };
+   g_autoptr(GOptionContext) context = NULL;
+   g_autoptr(GApplication) app = NULL;
+-  GError *error = NULL;
++  g_autoptr (GError) error = NULL;
+ 
+   g_set_application_name (_("GNOME Remote Desktop"));
+ 
+@@ -355,7 +355,6 @@ main (int argc, char **argv)
+   if (!g_option_context_parse (context, &argc, &argv, &error))
+     {
+       g_printerr ("Invalid option: %s\n", error->message);
+-      g_error_free (error);
+       return EXIT_FAILURE;
+     }
+ 
+-- 
+2.49.0
+
+
+From ff02a30d39813ec499e400af44dd636fb3a37752 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Wed, 28 May 2025 22:55:20 +0200
+Subject: [PATCH 2/7] utils: Add some time conversion helpers
+
+Useful when converting between second, microseconds, etc.
+---
+ src/grd-utils.h | 44 ++++++++++++++++++++++++++++++++++++++++++++
+ src/meson.build |  1 +
+ 2 files changed, 45 insertions(+)
+ create mode 100644 src/grd-utils.h
+
+diff --git a/src/grd-utils.h b/src/grd-utils.h
+new file mode 100644
+index 00000000..9fdb020a
+--- /dev/null
++++ b/src/grd-utils.h
+@@ -0,0 +1,44 @@
++/*
++ * Copyright (C) 2022 Pascal Nowack
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of the
++ * License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
++ * 02111-1307, USA.
++ */
++
++#ifndef GRD_UTILS_H
++#define GRD_UTILS_H
++
++#include <gio/gio.h>
++#include <stdint.h>
++
++static inline int64_t
++us (int64_t us)
++{
++  return us;
++}
++
++static inline int64_t
++ms2us (int64_t ms)
++{
++  return us (ms * 1000);
++}
++
++static inline int64_t
++s2us (uint64_t s)
++{
++  return ms2us (s * 1000);
++}
++
++#endif /* GRD_UTILS_H */
+diff --git a/src/meson.build b/src/meson.build
+index 133cc60e..04d92ebe 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -31,6 +31,7 @@ daemon_sources = files([
+   'grd-stream.c',
+   'grd-stream.h',
+   'grd-types.h',
++  'grd-utils.h',
+ ])
+ 
+ if have_rdp
+-- 
+2.49.0
+
+
+From 94187d5b46e83a2e9bf01a843edcf9de5b045760 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Mon, 30 Jun 2025 16:16:31 +0200
+Subject: [PATCH 3/7] utils: Add helper to close connection and notify
+
+Closing doesn't notify that it was closed, so lets add a helper that
+does so, that we then can uses to rely on the closed property being up
+to date.
+---
+ src/grd-utils.c | 32 ++++++++++++++++++++++++++++++++
+ src/grd-utils.h |  2 ++
+ src/meson.build |  1 +
+ 3 files changed, 35 insertions(+)
+ create mode 100644 src/grd-utils.c
+
+diff --git a/src/grd-utils.c b/src/grd-utils.c
+new file mode 100644
+index 00000000..772d6fc4
+--- /dev/null
++++ b/src/grd-utils.c
+@@ -0,0 +1,32 @@
++/*
++ * Copyright (C) 2010 Intel Corp.
++ * Copyright (C) 2014 Jonas Ådahl
++ * Copyright (C) 2016-2022 Red Hat Inc.
++ * Copyright (C) 2022 Pascal Nowack
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of the
++ * License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
++ * 02111-1307, USA.
++ */
++
++#include "config.h"
++
++#include "grd-utils.h"
++
++void
++grd_close_connection_and_notify (GSocketConnection *connection)
++{
++  g_io_stream_close (G_IO_STREAM (connection), NULL, NULL);
++  g_object_notify (G_OBJECT (connection), "closed");
++}
+diff --git a/src/grd-utils.h b/src/grd-utils.h
+index 9fdb020a..6fb81717 100644
+--- a/src/grd-utils.h
++++ b/src/grd-utils.h
+@@ -23,6 +23,8 @@
+ #include <gio/gio.h>
+ #include <stdint.h>
+ 
++void grd_close_connection_and_notify (GSocketConnection *connection);
++
+ static inline int64_t
+ us (int64_t us)
+ {
+diff --git a/src/meson.build b/src/meson.build
+index 04d92ebe..b375d37c 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -31,6 +31,7 @@ daemon_sources = files([
+   'grd-stream.c',
+   'grd-stream.h',
+   'grd-types.h',
++  'grd-utils.c',
+   'grd-utils.h',
+ ])
+ 
+-- 
+2.49.0
+
+
+From 51235c30f9433feb71992e4f2f74775850a6a243 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Wed, 28 May 2025 22:40:38 +0200
+Subject: [PATCH 4/7] Introduce throttler class
+
+This handles the throttling of incoming connections, and is intended to
+act as a first line of defence against denial of service attacks. It
+implements the following:
+
+ * It limits the global number of concurrent active connections
+ * It limits the number of concurrent active connections per peer
+   (roughly IP address)
+ * It limits the number of new connections per second coming from a peer
+ * It maintains a limited number of pending connections that is waiting
+   to be handled
+
+This avoids running into situations where an uncontrolled number of
+connection attempts causes resources to be exhausted, e.g. number of
+file descriptor exceeding the process limit.
+
+The limits are currently hard coded.
+
+Related: CVE-2025-5024
+---
+ src/grd-throttler.c | 467 ++++++++++++++++++++++++++++++++++++++++++++
+ src/grd-throttler.h |  41 ++++
+ src/meson.build     |   2 +
+ 3 files changed, 510 insertions(+)
+ create mode 100644 src/grd-throttler.c
+ create mode 100644 src/grd-throttler.h
+
+diff --git a/src/grd-throttler.c b/src/grd-throttler.c
+new file mode 100644
+index 00000000..e584433a
+--- /dev/null
++++ b/src/grd-throttler.c
+@@ -0,0 +1,467 @@
++/*
++ * Copyright (C) 2025 Red Hat
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of the
++ * License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
++ * 02111-1307, USA.
++ */
++
++#include "config.h"
++
++#include "grd-throttler.h"
++
++#include "grd-utils.h"
++
++#define MAX_GLOBAL_CONNECTIONS 10
++#define MAX_CONNECTIONS_PER_PEER 5
++#define MAX_PENDING_CONNECTIONS 5
++#define MAX_ATTEMPTS_PER_SECOND 5
++
++#define PRUNE_TIME_CUTOFF_US (s2us (1))
++
++typedef struct _GrdPeer
++{
++  GrdThrottler *throttler;
++  char *name;
++  int active_connections;
++  GArray *connect_timestamps;
++  GQueue *delayed_connections;
++  int64_t last_accept_us;
++} GrdPeer;
++
++struct _GrdThrottler
++{
++  GObject parent;
++
++  int active_connections;
++
++  GrdThrottlerAllowCallback allow_callback;
++  gpointer user_data;
++
++  GHashTable *peers;
++
++  GSource *delayed_connections_source;
++};
++
++G_DEFINE_TYPE (GrdThrottler, grd_throttler, G_TYPE_OBJECT)
++
++static GQuark quark_remote_address;
++
++static void
++maybe_queue_timeout (GrdThrottler *throttler);
++
++static void
++prune_old_timestamps (GArray  *timestamps,
++                      int64_t  now_us)
++{
++  size_t i;
++
++  if (!timestamps)
++    return;
++
++  for (i = 0; i < timestamps->len; i++)
++    {
++      int64_t ts_us = g_array_index (timestamps, int64_t, i);
++
++      if (now_us - ts_us < PRUNE_TIME_CUTOFF_US)
++        break;
++    }
++  g_array_remove_range (timestamps, 0, i);
++}
++
++static void
++maybe_dispose_peer (GrdThrottler   *throttler,
++                    GrdPeer        *peer,
++                    GHashTableIter *iter)
++{
++  if (peer->active_connections > 0)
++    return;
++
++  if (peer->connect_timestamps && peer->connect_timestamps->len > 0)
++    return;
++
++  if (!g_queue_is_empty (peer->delayed_connections))
++    return;
++
++  if (iter)
++    g_hash_table_iter_remove (iter);
++  else
++    g_hash_table_remove (throttler->peers, peer->name);
++}
++
++static void
++grd_throttler_register_connection (GrdThrottler *throttler,
++                                   GrdPeer      *peer)
++{
++  int64_t now_us;
++
++  peer->active_connections++;
++  throttler->active_connections++;
++
++  if (!peer->connect_timestamps)
++    peer->connect_timestamps = g_array_new (FALSE, FALSE, sizeof (int64_t));
++
++  now_us = g_get_monotonic_time ();
++
++  prune_old_timestamps (peer->connect_timestamps, now_us);
++  g_array_append_val (peer->connect_timestamps, now_us);
++}
++
++static void
++grd_throttler_unregister_connection (GrdThrottler      *throttler,
++                                     GSocketConnection *connection,
++                                     GrdPeer           *peer)
++{
++  g_return_if_fail (peer->active_connections > 0);
++  g_return_if_fail (throttler->active_connections > 0);
++
++  peer->active_connections--;
++  throttler->active_connections--;
++
++  maybe_dispose_peer (throttler, peer, NULL);
++  maybe_queue_timeout (throttler);
++}
++
++static void
++grd_throttler_deny_connection (GrdThrottler      *throttler,
++                               const char        *peer_name,
++                               GSocketConnection *connection)
++{
++  g_debug ("Denying connection from %s", peer_name);
++  g_io_stream_close (G_IO_STREAM (connection), NULL, NULL);
++}
++
++static void
++on_connection_closed_changed (GSocketConnection *connection,
++                              GParamSpec        *pspec,
++                              GrdThrottler      *throttler)
++{
++  const char *peer_name;
++  GrdPeer *peer;
++
++  g_assert (g_io_stream_is_closed (G_IO_STREAM (connection)));
++
++  peer_name = g_object_get_qdata (G_OBJECT (connection), quark_remote_address);
++  peer = g_hash_table_lookup (throttler->peers, peer_name);
++  grd_throttler_unregister_connection (throttler, connection, peer);
++}
++
++static void
++grd_throttler_allow_connection (GrdThrottler      *throttler,
++                                GSocketConnection *connection,
++                                GrdPeer           *peer)
++{
++  g_debug ("Accepting connection from %s", peer->name);
++
++  throttler->allow_callback (throttler, connection, throttler->user_data);
++
++  peer->last_accept_us = g_get_monotonic_time ();
++
++  g_object_set_qdata_full (G_OBJECT (connection), quark_remote_address,
++                           g_strdup (peer->name), g_free);
++  grd_throttler_register_connection (throttler, peer);
++  g_signal_connect (connection, "notify::closed",
++                    G_CALLBACK (on_connection_closed_changed), throttler);
++}
++
++static gboolean
++source_dispatch (GSource     *source,
++                 GSourceFunc  callback,
++                 gpointer     user_data)
++{
++  g_source_set_ready_time (source, -1);
++
++  return callback (user_data);
++}
++
++static GSourceFuncs source_funcs =
++{
++  .dispatch = source_dispatch,
++};
++
++static void
++prune_closed_connections (GQueue *queue)
++{
++  GList *l;
++
++  l = queue->head;
++  while (l)
++    {
++      GSocketConnection *connection = G_SOCKET_CONNECTION (l->data);
++      GList *l_next = l->next;
++
++      if (g_io_stream_is_closed (G_IO_STREAM (connection)))
++        {
++          g_queue_delete_link (queue, l);
++          g_object_unref (connection);
++        }
++
++      l = l_next;
++    }
++}
++
++static gboolean
++is_connection_limit_reached (GrdThrottler *throttler,
++                             GrdPeer      *peer)
++{
++  if (peer->active_connections >= MAX_CONNECTIONS_PER_PEER)
++    return TRUE;
++
++  if (throttler->active_connections >= MAX_GLOBAL_CONNECTIONS)
++    return TRUE;
++
++  return FALSE;
++}
++
++static gboolean
++is_new_connection_allowed (GrdThrottler *throttler,
++                           GrdPeer      *peer)
++{
++  if (is_connection_limit_reached (throttler, peer))
++    return FALSE;
++
++  if (peer->connect_timestamps &&
++      peer->connect_timestamps->len >= MAX_ATTEMPTS_PER_SECOND)
++    return FALSE;
++
++  return TRUE;
++}
++
++static gboolean
++dispatch_delayed_connections (gpointer user_data)
++{
++  GrdThrottler *throttler = GRD_THROTTLER (user_data);
++  GHashTableIter iter;
++  gpointer key, value;
++
++  g_hash_table_iter_init (&iter, throttler->peers);
++  while (g_hash_table_iter_next (&iter, &key, &value))
++    {
++      GrdPeer *peer = value;
++      GQueue *queue = peer->delayed_connections;
++      GSocketConnection *connection;
++
++      prune_closed_connections (queue);
++      connection = g_queue_peek_tail (queue);
++
++      if (!connection)
++        {
++          maybe_dispose_peer (throttler, peer, &iter);
++          continue;
++        }
++
++      if (is_new_connection_allowed (throttler, peer))
++        {
++          g_queue_pop_tail (queue);
++          grd_throttler_allow_connection (throttler, connection, peer);
++          g_object_unref (connection);
++        }
++    }
++
++  maybe_queue_timeout (throttler);
++
++  return G_SOURCE_CONTINUE;
++}
++
++static void
++ensure_delayed_connections_source (GrdThrottler *throttler)
++{
++  if (throttler->delayed_connections_source)
++    return;
++
++  throttler->delayed_connections_source = g_source_new (&source_funcs,
++                                                        sizeof (GSource));
++  g_source_set_callback (throttler->delayed_connections_source,
++                         dispatch_delayed_connections, throttler, NULL);
++  g_source_attach (throttler->delayed_connections_source, NULL);
++  g_source_unref (throttler->delayed_connections_source);
++}
++
++static void
++maybe_queue_timeout (GrdThrottler *throttler)
++{
++  GHashTableIter iter;
++  gpointer key, value;
++  int64_t next_timeout_us = INT64_MAX;
++
++
++  g_hash_table_iter_init (&iter, throttler->peers);
++  while (g_hash_table_iter_next (&iter, &key, &value))
++    {
++      GrdPeer *peer = value;
++
++      if (is_connection_limit_reached (throttler, peer))
++        continue;
++
++      if (g_queue_is_empty (peer->delayed_connections))
++        continue;
++
++      next_timeout_us = MIN (next_timeout_us,
++                             peer->last_accept_us +
++                             G_USEC_PER_SEC / MAX_ATTEMPTS_PER_SECOND);
++    }
++
++
++  if (next_timeout_us == INT64_MAX)
++    next_timeout_us = -1;
++
++  if (next_timeout_us >= 0)
++    {
++      ensure_delayed_connections_source (throttler);
++      g_source_set_ready_time (throttler->delayed_connections_source,
++                               next_timeout_us);
++    }
++}
++
++static void
++maybe_delay_connection (GrdThrottler      *throttler,
++                        GSocketConnection *connection,
++                        GrdPeer           *peer,
++                        int64_t            now_us)
++{
++  GQueue *delayed_connections;
++
++  delayed_connections = peer->delayed_connections;
++  if (!delayed_connections)
++    {
++      delayed_connections = g_queue_new ();
++      peer->delayed_connections = delayed_connections;
++    }
++
++  if (g_queue_get_length (delayed_connections) > MAX_PENDING_CONNECTIONS)
++    {
++      grd_throttler_deny_connection (throttler, peer->name, connection);
++      return;
++    }
++
++  g_debug ("Delaying connection from %s", peer->name);
++
++  g_queue_push_head (delayed_connections, g_object_ref (connection));
++  maybe_queue_timeout (throttler);
++}
++
++static GrdPeer *
++ensure_peer (GrdThrottler *throttler,
++             const char   *peer_name)
++{
++  GrdPeer *peer;
++
++  peer = g_hash_table_lookup (throttler->peers, peer_name);
++  if (peer)
++    return peer;
++
++  peer = g_new0 (GrdPeer, 1);
++  peer->throttler = throttler;
++  peer->name = g_strdup (peer_name);
++  peer->delayed_connections = g_queue_new ();
++
++  g_hash_table_insert (throttler->peers,
++                       g_strdup (peer_name), peer);
++
++  return peer;
++}
++
++void
++grd_throttler_handle_connection (GrdThrottler      *throttler,
++                                 GSocketConnection *connection)
++{
++  g_autoptr (GError) error = NULL;
++  g_autoptr (GSocketAddress) remote_address = NULL;
++  GInetAddress *inet_address;
++  g_autofree char *peer_name = NULL;
++  GrdPeer *peer;
++  int64_t now_us;
++
++  remote_address = g_socket_connection_get_remote_address (connection, &error);
++  if (!remote_address)
++    {
++      g_warning ("Failed to get remote address: %s", error->message);
++      grd_throttler_deny_connection (throttler, "unknown peer", connection);
++      return;
++    }
++
++  inet_address =
++    g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (remote_address));
++  peer_name = g_inet_address_to_string (inet_address);
++
++  g_debug ("New incoming connection from %s", peer_name);
++
++  peer = ensure_peer (throttler, peer_name);
++
++  prune_closed_connections (peer->delayed_connections);
++
++  now_us = g_get_monotonic_time ();
++  prune_old_timestamps (peer->connect_timestamps, now_us);
++  if (is_new_connection_allowed (throttler, peer) &&
++      g_queue_get_length (peer->delayed_connections) == 0)
++    {
++      grd_throttler_allow_connection (throttler, connection, peer);
++      return;
++    }
++
++  maybe_delay_connection (throttler, connection, peer, now_us);
++}
++
++GrdThrottler *
++grd_throttler_new (GrdThrottlerAllowCallback allow_callback,
++                   gpointer                  user_data)
++{
++  GrdThrottler *throttler;
++
++  throttler = g_object_new (GRD_TYPE_THROTTLER, NULL);
++  throttler->allow_callback = allow_callback;
++  throttler->user_data = user_data;
++
++  return throttler;
++}
++
++static void
++grd_peer_free (GrdPeer *peer)
++{
++  if (peer->delayed_connections)
++    g_queue_free_full (peer->delayed_connections, g_object_unref);
++  g_clear_pointer (&peer->connect_timestamps, g_array_unref);
++  g_clear_pointer (&peer->name, g_free);
++  g_free (peer);
++}
++
++static void
++grd_throttler_finalize (GObject *object)
++{
++  GrdThrottler *throttler = GRD_THROTTLER(object);
++
++  g_clear_pointer (&throttler->delayed_connections_source, g_source_destroy);
++  g_clear_pointer (&throttler->peers, g_hash_table_unref);
++
++  G_OBJECT_CLASS (grd_throttler_parent_class)->finalize (object);
++}
++
++static void
++grd_throttler_init (GrdThrottler *throttler)
++{
++  throttler->peers =
++    g_hash_table_new_full (g_str_hash, g_str_equal,
++                           g_free, (GDestroyNotify) grd_peer_free);
++}
++
++static void
++grd_throttler_class_init (GrdThrottlerClass *klass)
++{
++  GObjectClass *object_class = G_OBJECT_CLASS (klass);
++
++  object_class->finalize = grd_throttler_finalize;
++
++  quark_remote_address =
++    g_quark_from_static_string ("grd-remote-address-string");
++}
+diff --git a/src/grd-throttler.h b/src/grd-throttler.h
+new file mode 100644
+index 00000000..d57d653a
+--- /dev/null
++++ b/src/grd-throttler.h
+@@ -0,0 +1,41 @@
++/*
++ * Copyright (C) 2025 Red Hat
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of the
++ * License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
++ * 02111-1307, USA.
++ */
++
++#ifndef GRD_THROTTLER_H
++#define GRD_THROTTLER_H
++
++#include <gio/gio.h>
++#include <glib-object.h>
++
++#define GRD_TYPE_THROTTLER (grd_throttler_get_type())
++G_DECLARE_FINAL_TYPE (GrdThrottler, grd_throttler, GRD, THROTTLER, GObject)
++
++typedef void (* GrdThrottlerAllowCallback) (GrdThrottler      *throttler,
++                                            GSocketConnection *connection,
++                                            gpointer           user_data);
++
++void
++grd_throttler_handle_connection (GrdThrottler      *throttler,
++                                 GSocketConnection *connection);
++
++GrdThrottler *
++grd_throttler_new (GrdThrottlerAllowCallback allow_callback,
++                   gpointer                  user_data);
++
++#endif /* GRD_THROTTLER_H */
+diff --git a/src/meson.build b/src/meson.build
+index b375d37c..767fa461 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -30,6 +30,8 @@ daemon_sources = files([
+   'grd-settings.h',
+   'grd-stream.c',
+   'grd-stream.h',
++  'grd-throttler.c',
++  'grd-throttler.h',
+   'grd-types.h',
+   'grd-utils.c',
+   'grd-utils.h',
+-- 
+2.49.0
+
+
+From 2b8e3f1a8f13bb4de8458a225128a24ec7f70b94 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Fri, 30 May 2025 16:54:00 +0200
+Subject: [PATCH 5/7] throttler: Introduce limits struct
+
+This will be used by the server implementation to customize throttling
+limits. This will be used by the VNC server to limit to one global
+session at a time, replacing it's own existing condition.
+---
+ src/grd-throttler.c | 64 +++++++++++++++++++++++++++++++++++++--------
+ src/grd-throttler.h | 14 ++++++++--
+ 2 files changed, 65 insertions(+), 13 deletions(-)
+
+diff --git a/src/grd-throttler.c b/src/grd-throttler.c
+index e584433a..0429a089 100644
+--- a/src/grd-throttler.c
++++ b/src/grd-throttler.c
+@@ -23,10 +23,18 @@
+ 
+ #include "grd-utils.h"
+ 
+-#define MAX_GLOBAL_CONNECTIONS 10
+-#define MAX_CONNECTIONS_PER_PEER 5
+-#define MAX_PENDING_CONNECTIONS 5
+-#define MAX_ATTEMPTS_PER_SECOND 5
++#define DEFAULT_MAX_GLOBAL_CONNECTIONS 10
++#define DEFAULT_MAX_CONNECTIONS_PER_PEER 5
++#define DEFAULT_MAX_PENDING_CONNECTIONS 5
++#define DEFAULT_MAX_ATTEMPTS_PER_SECOND 10
++
++struct _GrdThrottlerLimits
++{
++  int max_global_connections;
++  int max_connections_per_peer;
++  int max_pending_connections;
++  int max_attempts_per_second;
++};
+ 
+ #define PRUNE_TIME_CUTOFF_US (s2us (1))
+ 
+@@ -44,6 +52,8 @@ struct _GrdThrottler
+ {
+   GObject parent;
+ 
++  GrdThrottlerLimits *limits;
++
+   int active_connections;
+ 
+   GrdThrottlerAllowCallback allow_callback;
+@@ -215,10 +225,12 @@ static gboolean
+ is_connection_limit_reached (GrdThrottler *throttler,
+                              GrdPeer      *peer)
+ {
+-  if (peer->active_connections >= MAX_CONNECTIONS_PER_PEER)
++  GrdThrottlerLimits *limits = throttler->limits;
++
++  if (peer->active_connections >= limits->max_connections_per_peer)
+     return TRUE;
+ 
+-  if (throttler->active_connections >= MAX_GLOBAL_CONNECTIONS)
++  if (throttler->active_connections >= limits->max_global_connections)
+     return TRUE;
+ 
+   return FALSE;
+@@ -228,11 +240,13 @@ static gboolean
+ is_new_connection_allowed (GrdThrottler *throttler,
+                            GrdPeer      *peer)
+ {
++  GrdThrottlerLimits *limits = throttler->limits;
++
+   if (is_connection_limit_reached (throttler, peer))
+     return FALSE;
+ 
+   if (peer->connect_timestamps &&
+-      peer->connect_timestamps->len >= MAX_ATTEMPTS_PER_SECOND)
++      peer->connect_timestamps->len >= limits->max_attempts_per_second)
+     return FALSE;
+ 
+   return TRUE;
+@@ -291,6 +305,7 @@ ensure_delayed_connections_source (GrdThrottler *throttler)
+ static void
+ maybe_queue_timeout (GrdThrottler *throttler)
+ {
++  GrdThrottlerLimits *limits = throttler->limits;
+   GHashTableIter iter;
+   gpointer key, value;
+   int64_t next_timeout_us = INT64_MAX;
+@@ -309,7 +324,7 @@ maybe_queue_timeout (GrdThrottler *throttler)
+ 
+       next_timeout_us = MIN (next_timeout_us,
+                              peer->last_accept_us +
+-                             G_USEC_PER_SEC / MAX_ATTEMPTS_PER_SECOND);
++                             G_USEC_PER_SEC / limits->max_attempts_per_second);
+     }
+ 
+ 
+@@ -330,6 +345,7 @@ maybe_delay_connection (GrdThrottler      *throttler,
+                         GrdPeer           *peer,
+                         int64_t            now_us)
+ {
++  GrdThrottlerLimits *limits = throttler->limits;
+   GQueue *delayed_connections;
+ 
+   delayed_connections = peer->delayed_connections;
+@@ -339,7 +355,7 @@ maybe_delay_connection (GrdThrottler      *throttler,
+       peer->delayed_connections = delayed_connections;
+     }
+ 
+-  if (g_queue_get_length (delayed_connections) > MAX_PENDING_CONNECTIONS)
++  if (g_queue_get_length (delayed_connections) > limits->max_pending_connections)
+     {
+       grd_throttler_deny_connection (throttler, peer->name, connection);
+       return;
+@@ -413,15 +429,40 @@ grd_throttler_handle_connection (GrdThrottler      *throttler,
+   maybe_delay_connection (throttler, connection, peer, now_us);
+ }
+ 
++void
++grd_throttler_limits_set_max_global_connections (GrdThrottlerLimits *limits,
++                                                 int                 limit)
++{
++  limits->max_global_connections = limit;
++}
++
++GrdThrottlerLimits *
++grd_throttler_limits_new (void)
++{
++  GrdThrottlerLimits *limits;
++
++  limits = g_new0 (GrdThrottlerLimits, 1);
++  limits->max_global_connections = DEFAULT_MAX_GLOBAL_CONNECTIONS;
++  limits->max_connections_per_peer = DEFAULT_MAX_CONNECTIONS_PER_PEER;
++  limits->max_pending_connections = DEFAULT_MAX_PENDING_CONNECTIONS;
++  limits->max_attempts_per_second = DEFAULT_MAX_ATTEMPTS_PER_SECOND;
++
++  return limits;
++}
++
+ GrdThrottler *
+-grd_throttler_new (GrdThrottlerAllowCallback allow_callback,
+-                   gpointer                  user_data)
++grd_throttler_new (GrdThrottlerLimits        *limits,
++                   GrdThrottlerAllowCallback  allow_callback,
++                   gpointer                   user_data)
+ {
+   GrdThrottler *throttler;
+ 
++  g_assert (limits);
++
+   throttler = g_object_new (GRD_TYPE_THROTTLER, NULL);
+   throttler->allow_callback = allow_callback;
+   throttler->user_data = user_data;
++  throttler->limits = limits;
+ 
+   return throttler;
+ }
+@@ -443,6 +484,7 @@ grd_throttler_finalize (GObject *object)
+ 
+   g_clear_pointer (&throttler->delayed_connections_source, g_source_destroy);
+   g_clear_pointer (&throttler->peers, g_hash_table_unref);
++  g_clear_pointer (&throttler->limits, g_free);
+ 
+   G_OBJECT_CLASS (grd_throttler_parent_class)->finalize (object);
+ }
+diff --git a/src/grd-throttler.h b/src/grd-throttler.h
+index d57d653a..9e72b8f1 100644
+--- a/src/grd-throttler.h
++++ b/src/grd-throttler.h
+@@ -23,6 +23,8 @@
+ #include <gio/gio.h>
+ #include <glib-object.h>
+ 
++typedef struct _GrdThrottlerLimits GrdThrottlerLimits;
++
+ #define GRD_TYPE_THROTTLER (grd_throttler_get_type())
+ G_DECLARE_FINAL_TYPE (GrdThrottler, grd_throttler, GRD, THROTTLER, GObject)
+ 
+@@ -34,8 +36,16 @@ void
+ grd_throttler_handle_connection (GrdThrottler      *throttler,
+                                  GSocketConnection *connection);
+ 
++void
++grd_throttler_limits_set_max_global_connections (GrdThrottlerLimits *limits,
++                                                 int                 limit);
++
++GrdThrottlerLimits *
++grd_throttler_limits_new (void);
++
+ GrdThrottler *
+-grd_throttler_new (GrdThrottlerAllowCallback allow_callback,
+-                   gpointer                  user_data);
++grd_throttler_new (GrdThrottlerLimits        *limits,
++                   GrdThrottlerAllowCallback  allow_callback,
++                   gpointer                   user_data);
+ 
+ #endif /* GRD_THROTTLER_H */
+-- 
+2.49.0
+
+
+From 82121ad4980c99277e53cb18dedcddb42858fae0 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Fri, 30 May 2025 16:55:46 +0200
+Subject: [PATCH 6/7] vnc-server: Hook up VNC server to the throttler
+
+This allows us to replace existing single session limitation with
+limiting the throttler to one accepted connection at any given time.
+---
+ src/grd-session-vnc.c |  2 ++
+ src/grd-vnc-server.c  | 44 ++++++++++++++++++++++++++++++++++++-------
+ 2 files changed, 39 insertions(+), 7 deletions(-)
+
+diff --git a/src/grd-session-vnc.c b/src/grd-session-vnc.c
+index 7a4c6b32..ec8661ca 100644
+--- a/src/grd-session-vnc.c
++++ b/src/grd-session-vnc.c
+@@ -33,6 +33,7 @@
+ #include "grd-prompt.h"
+ #include "grd-settings.h"
+ #include "grd-stream.h"
++#include "grd-utils.h"
+ #include "grd-vnc-server.h"
+ #include "grd-vnc-pipewire-stream.h"
+ 
+@@ -813,6 +814,7 @@ grd_session_vnc_stop (GrdSession *session)
+ 
+   grd_session_vnc_pause (session_vnc);
+ 
++  grd_close_connection_and_notify (session_vnc->connection);
+   g_clear_object (&session_vnc->connection);
+   g_clear_object (&session_vnc->clipboard_vnc);
+   g_clear_pointer (&session_vnc->rfb_screen->frameBuffer, g_free);
+diff --git a/src/grd-vnc-server.c b/src/grd-vnc-server.c
+index f9c68dba..1712858c 100644
+--- a/src/grd-vnc-server.c
++++ b/src/grd-vnc-server.c
+@@ -30,6 +30,8 @@
+ 
+ #include "grd-context.h"
+ #include "grd-session-vnc.h"
++#include "grd-throttler.h"
++#include "grd-utils.h"
+ #include "grd-vnc-tls.h"
+ 
+ 
+@@ -44,6 +46,8 @@ struct _GrdVncServer
+ {
+   GSocketService parent;
+ 
++  GrdThrottler *throttler;
++
+   GList *sessions;
+ 
+   GList *stopped_sessions;
+@@ -54,6 +58,11 @@ struct _GrdVncServer
+ 
+ G_DEFINE_TYPE (GrdVncServer, grd_vnc_server, G_TYPE_SOCKET_SERVICE);
+ 
++static void
++allow_connection_cb (GrdThrottler      *throttler,
++                     GSocketConnection *connection,
++                     gpointer           user_data);
++
+ GrdContext *
+ grd_vnc_server_get_context (GrdVncServer *vnc_server)
+ {
+@@ -104,23 +113,24 @@ on_session_stopped (GrdSession *session, GrdVncServer *vnc_server)
+     }
+ }
+ 
+-static gboolean
+-on_incoming (GSocketService    *service,
+-             GSocketConnection *connection)
++static void
++allow_connection_cb (GrdThrottler      *throttler,
++                     GSocketConnection *connection,
++                     gpointer           user_data)
+ {
+-  GrdVncServer *vnc_server = GRD_VNC_SERVER (service);
++  GrdVncServer *vnc_server = GRD_VNC_SERVER (user_data);
+   GrdSessionVnc *session_vnc;
+ 
+-  g_debug ("New incoming VNC connection");
+-
+   if (vnc_server->sessions)
+     {
+       /* TODO: Add the rfbScreen instance to GrdVncServer to support multiple
+        * sessions. */
+       g_debug ("Refusing new VNC connection: already an active session");
+-      return TRUE;
++      return;
+     }
+ 
++  g_debug ("Creating new VNC session");
++
+   session_vnc = grd_session_vnc_new (vnc_server, connection);
+   vnc_server->sessions = g_list_append (vnc_server->sessions, session_vnc);
+   grd_context_add_session (vnc_server->context, GRD_SESSION (session_vnc));
+@@ -128,7 +138,16 @@ on_incoming (GSocketService    *service,
+   g_signal_connect (session_vnc, "stopped",
+                     G_CALLBACK (on_session_stopped),
+                     vnc_server);
++}
+ 
++static gboolean
++on_incoming (GSocketService    *service,
++             GSocketConnection *connection)
++{
++  GrdVncServer *vnc_server = GRD_VNC_SERVER (service);
++
++  grd_throttler_handle_connection (vnc_server->throttler,
++                                   connection);
+   return TRUE;
+ }
+ 
+@@ -252,6 +271,8 @@ grd_vnc_server_dispose (GObject *object)
+       vnc_server->sessions = NULL;
+     }
+ 
++  g_clear_object (&vnc_server->throttler);
++
+   G_OBJECT_CLASS (grd_vnc_server_parent_class)->dispose (object);
+ }
+ 
+@@ -277,6 +298,15 @@ grd_vnc_server_constructed (GObject *object)
+ static void
+ grd_vnc_server_init (GrdVncServer *vnc_server)
+ {
++  GrdThrottlerLimits *limits;
++
++  limits = grd_throttler_limits_new ();
++  /* TODO: Add the rfbScreen instance to GrdVncServer to support multiple
++   * sessions. */
++  grd_throttler_limits_set_max_global_connections (limits, 1);
++  vnc_server->throttler = grd_throttler_new (limits,
++                                             allow_connection_cb,
++                                             vnc_server);
+ }
+ 
+ static void
+-- 
+2.49.0
+
+
+From 9f09f1d318d7b10ed75fbf162d9b403ea051041c Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Mon, 30 Jun 2025 16:01:37 +0200
+Subject: [PATCH 7/7] throttler: Allow overriding hard coded parallel
+ connections limit
+
+Overriding is done via an argument passed to the daemon. This allows
+using the same daemon with a larger amount of users, which one would
+achieve by overriding the relevant systemd service file by both adding
+the --max-parallel-connections argument, as well as bumping the limit of
+number of open file descriptors to something adequate.
+---
+ src/grd-daemon.c     | 24 ++++++++++++++++++++++++
+ src/grd-settings.c   | 15 +++++++++++++++
+ src/grd-settings.h   |  5 +++++
+ src/grd-throttler.c  |  9 ++++++---
+ src/grd-throttler.h  |  4 +++-
+ src/grd-vnc-server.c | 18 +++++++++---------
+ 6 files changed, 62 insertions(+), 13 deletions(-)
+
+diff --git a/src/grd-daemon.c b/src/grd-daemon.c
+index b164e6ae..5710e891 100644
+--- a/src/grd-daemon.c
++++ b/src/grd-daemon.c
+@@ -37,6 +37,8 @@
+ #include "grd-session.h"
+ #include "grd-vnc-server.h"
+ 
++#define DEFAULT_MAX_PARALLEL_CONNECTIONS 10
++
+ struct _GrdDaemon
+ {
+   GApplication parent;
+@@ -57,6 +59,9 @@ struct _GrdDaemon
+ 
+ G_DEFINE_TYPE (GrdDaemon, grd_daemon, G_TYPE_APPLICATION)
+ 
++#define QUOTE1(a) #a
++#define QUOTE(a) QUOTE1(a)
++
+ static gboolean
+ is_daemon_ready (GrdDaemon *daemon)
+ {
+@@ -334,6 +339,7 @@ main (int argc, char **argv)
+   gboolean print_version = FALSE;
+   int rdp_port = -1;
+   int vnc_port = -1;
++  int max_parallel_connections = DEFAULT_MAX_PARALLEL_CONNECTIONS;
+ 
+   GOptionEntry entries[] = {
+     { "version", 0, 0, G_OPTION_ARG_NONE, &print_version,
+@@ -342,6 +348,10 @@ main (int argc, char **argv)
+       "RDP port", NULL },
+     { "vnc-port", 0, 0, G_OPTION_ARG_INT, &vnc_port,
+       "VNC port", NULL },
++    { "max-parallel-connections", 0, 0,
++      G_OPTION_ARG_INT, &max_parallel_connections,
++      "Max number of parallel connections (0 for unlimited, "
++      "default: " QUOTE(DEFAULT_MAX_PARALLEL_CONNECTIONS) ")", NULL },
+     { NULL }
+   };
+   g_autoptr(GOptionContext) context = NULL;
+@@ -371,11 +381,25 @@ main (int argc, char **argv)
+ 
+   add_actions (app);
+ 
++  if (max_parallel_connections == 0)
++    {
++      max_parallel_connections = INT_MAX;
++    }
++  else if (max_parallel_connections < 0)
++    {
++      g_printerr ("Invalid number of max parallel connections: %d\n",
++                  max_parallel_connections);
++      return EXIT_SUCCESS;
++    }
++
+   settings = grd_context_get_settings (GRD_DAEMON (app)->context);
+   if (rdp_port != -1)
+     grd_settings_override_rdp_port (settings, rdp_port);
+   if (vnc_port != -1)
+     grd_settings_override_vnc_port (settings, vnc_port);
+ 
++  grd_settings_override_max_parallel_connections (settings,
++                                                  max_parallel_connections);
++
+   return g_application_run (app, argc, argv);
+ }
+diff --git a/src/grd-settings.c b/src/grd-settings.c
+index 12d86936..8606bb80 100644
+--- a/src/grd-settings.c
++++ b/src/grd-settings.c
+@@ -62,6 +62,8 @@ struct _GrdSettings
+     int port;
+     GrdVncEncryption encryption;
+   } vnc;
++
++  int max_parallel_connections;
+ };
+ 
+ G_DEFINE_TYPE (GrdSettings, grd_settings, G_TYPE_OBJECT)
+@@ -108,6 +110,19 @@ grd_settings_get_vnc_port (GrdSettings *settings)
+   return settings->vnc.port;
+ }
+ 
++void
++grd_settings_override_max_parallel_connections (GrdSettings *settings,
++                                                int          max_parallel_connections)
++{
++  settings->max_parallel_connections = max_parallel_connections;
++}
++
++int
++grd_settings_get_max_parallel_connections (GrdSettings *settings)
++{
++  return settings->max_parallel_connections;
++}
++
+ void
+ grd_settings_override_rdp_port (GrdSettings *settings,
+                                 int          port)
+diff --git a/src/grd-settings.h b/src/grd-settings.h
+index b940fdb1..664e6423 100644
+--- a/src/grd-settings.h
++++ b/src/grd-settings.h
+@@ -39,6 +39,11 @@ int grd_settings_get_rdp_port (GrdSettings *settings);
+ 
+ int grd_settings_get_vnc_port (GrdSettings *settings);
+ 
++void grd_settings_override_max_parallel_connections (GrdSettings *settings,
++                                                     int          max_parallel_connections);
++
++int grd_settings_get_max_parallel_connections (GrdSettings *settings);
++
+ void grd_settings_override_rdp_port (GrdSettings *settings,
+                                      int          port);
+ 
+diff --git a/src/grd-throttler.c b/src/grd-throttler.c
+index 0429a089..9ec31b35 100644
+--- a/src/grd-throttler.c
++++ b/src/grd-throttler.c
+@@ -21,9 +21,10 @@
+ 
+ #include "grd-throttler.h"
+ 
++#include "grd-context.h"
++#include "grd-settings.h"
+ #include "grd-utils.h"
+ 
+-#define DEFAULT_MAX_GLOBAL_CONNECTIONS 10
+ #define DEFAULT_MAX_CONNECTIONS_PER_PEER 5
+ #define DEFAULT_MAX_PENDING_CONNECTIONS 5
+ #define DEFAULT_MAX_ATTEMPTS_PER_SECOND 10
+@@ -437,12 +438,14 @@ grd_throttler_limits_set_max_global_connections (GrdThrottlerLimits *limits,
+ }
+ 
+ GrdThrottlerLimits *
+-grd_throttler_limits_new (void)
++grd_throttler_limits_new (GrdContext *context)
+ {
++  GrdSettings *settings = grd_context_get_settings (context);
+   GrdThrottlerLimits *limits;
+ 
+   limits = g_new0 (GrdThrottlerLimits, 1);
+-  limits->max_global_connections = DEFAULT_MAX_GLOBAL_CONNECTIONS;
++  limits->max_global_connections =
++    grd_settings_get_max_parallel_connections (settings);
+   limits->max_connections_per_peer = DEFAULT_MAX_CONNECTIONS_PER_PEER;
+   limits->max_pending_connections = DEFAULT_MAX_PENDING_CONNECTIONS;
+   limits->max_attempts_per_second = DEFAULT_MAX_ATTEMPTS_PER_SECOND;
+diff --git a/src/grd-throttler.h b/src/grd-throttler.h
+index 9e72b8f1..a9554202 100644
+--- a/src/grd-throttler.h
++++ b/src/grd-throttler.h
+@@ -23,6 +23,8 @@
+ #include <gio/gio.h>
+ #include <glib-object.h>
+ 
++#include "grd-types.h"
++
+ typedef struct _GrdThrottlerLimits GrdThrottlerLimits;
+ 
+ #define GRD_TYPE_THROTTLER (grd_throttler_get_type())
+@@ -41,7 +43,7 @@ grd_throttler_limits_set_max_global_connections (GrdThrottlerLimits *limits,
+                                                  int                 limit);
+ 
+ GrdThrottlerLimits *
+-grd_throttler_limits_new (void);
++grd_throttler_limits_new (GrdContext *context);
+ 
+ GrdThrottler *
+ grd_throttler_new (GrdThrottlerLimits        *limits,
+diff --git a/src/grd-vnc-server.c b/src/grd-vnc-server.c
+index 1712858c..c307f9c5 100644
+--- a/src/grd-vnc-server.c
++++ b/src/grd-vnc-server.c
+@@ -281,6 +281,7 @@ grd_vnc_server_constructed (GObject *object)
+ {
+   GrdVncServer *vnc_server = GRD_VNC_SERVER (object);
+   GrdSettings *settings = grd_context_get_settings (vnc_server->context);
++  GrdThrottlerLimits *limits;
+ 
+   if (grd_context_get_debug_flags (vnc_server->context) & GRD_DEBUG_VNC)
+     rfbLogEnable (1);
+@@ -292,21 +293,20 @@ grd_vnc_server_constructed (GObject *object)
+                     vnc_server);
+   sync_encryption_settings (vnc_server);
+ 
+-  G_OBJECT_CLASS (grd_vnc_server_parent_class)->constructed (object);
+-}
+-
+-static void
+-grd_vnc_server_init (GrdVncServer *vnc_server)
+-{
+-  GrdThrottlerLimits *limits;
+-
+-  limits = grd_throttler_limits_new ();
++  limits = grd_throttler_limits_new (vnc_server->context);
+   /* TODO: Add the rfbScreen instance to GrdVncServer to support multiple
+    * sessions. */
+   grd_throttler_limits_set_max_global_connections (limits, 1);
+   vnc_server->throttler = grd_throttler_new (limits,
+                                              allow_connection_cb,
+                                              vnc_server);
++
++  G_OBJECT_CLASS (grd_vnc_server_parent_class)->constructed (object);
++}
++
++static void
++grd_vnc_server_init (GrdVncServer *vnc_server)
++{
+ }
+ 
+ static void
+-- 
+2.49.0
+

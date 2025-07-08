@@ -15,7 +15,7 @@
 
 Name:           gnome-remote-desktop
 Version:        40.0
-Release:        10%{?dist}
+Release:        11%{?dist}
 Summary:        GNOME Remote Desktop screen share service
 
 License:        GPLv2+
@@ -29,6 +29,9 @@ Patch0:         gnutls-anontls.patch
 
 # Backport upstream leak fix (rhbz#1951129)
 Patch1:         0001-pipewire-stream-Don-t-leak-GSource-s.patch
+
+# Connection throttling (RHEL-92795)
+Patch2:         connection-throttling.patch
 
 ### LibVNCServer patches
 ## TLS security type enablement patches
@@ -125,6 +128,7 @@ done
 %setup -n %{name}-%{tarball_version}
 %patch0 -p1
 %patch1 -p1
+%patch2 -p1
 
 
 %build
@@ -199,6 +203,10 @@ popd
 
 
 %changelog
+* Thu Jul 03 2025 Jonas Ådahl <jadahl@redhat.com> - 40.0-11
+- Backport connection throttling
+  Resolves: RHEL-92795
+
 * Wed Jul 19 2023 Jonas Ådahl <jadahl@redhat.com> - 40.0-10
 - Don't compile in SHA1 support again
   Resolves: #2223925
