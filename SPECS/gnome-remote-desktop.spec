@@ -2,7 +2,7 @@
 
 Name:           gnome-remote-desktop
 Version:        0.1.8
-Release:        3%{?dist}
+Release:        4%{?dist}
 Summary:        GNOME Remote Desktop screen share service
 
 License:        GPLv2+
@@ -22,6 +22,9 @@ Patch5:         0001-vnc-pipewire-stream-Remove-assert.patch
 
 # Cursor only frame fixes (#1837406)
 Patch6:         cursor-only-frame-fixes.patch
+
+# Connection throttling (RHEL-92791)
+Patch7:         connection-throttling.patch
 
 BuildRequires:  git
 BuildRequires:  gcc
@@ -81,6 +84,10 @@ GNOME desktop environment.
 
 
 %changelog
+* Thu Jul 03 2025 Jonas Ådahl <jadahl@redhat.com> - 0.1.8-4
+- Backport connection throttling
+  Resolves: RHEL-92791
+
 * Wed Jul 15 2020 Jonas Ådahl <jadahl@redhat.com> - 0.1.8-3
 - Backport cursor only frame fixes
   Related: #1837406
