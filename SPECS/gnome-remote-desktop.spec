@@ -13,7 +13,7 @@
 
 Name:           gnome-remote-desktop
 Version:        47.3
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        GNOME Remote Desktop screen share service
 
 License:        GPL-2.0-or-later
@@ -23,6 +23,9 @@ Source0:        https://download.gnome.org/sources/%{name}/47/%{name}-%{tarball_
 # Adds encryption support (requires patched LibVNCServer)
 Patch0:         gnutls-anontls.patch
 Patch1:         connection-throttling.patch
+
+# https://issues.redhat.com/browse/RHEL-146620
+Patch2:         0001-hwaccel-nvidia-Fix-image-corruptions-on-Blackwell-GP.patch
 
 BuildRequires:  asciidoc
 BuildRequires:  gcc
@@ -148,6 +151,10 @@ GNOME desktop environment.
 
 
 %changelog
+* Tue Feb 10 2026 Jonas Ådahl <jadahl@redhat.com> - 47.3-3
+- Fix image corruptions on NVIDIA Blackwell GPUs
+  Resolves: RHEL-146620
+
 * Thu Jul 03 2025 Jonas Ådahl <jadahl@redhat.com> - 47.3-2
 - Backport connection throttling
   Resolves: RHEL-92787
