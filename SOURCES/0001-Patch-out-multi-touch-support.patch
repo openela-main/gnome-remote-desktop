@@ -1,0 +1,210 @@
+From 26114b9ce739f748db1fd1379a977f55815346bf Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Wed, 12 Nov 2025 16:53:36 +0100
+Subject: [PATCH] Patch out multi touch support
+
+This is needed to allow building on older FreeRDP.
+---
+ meson.build           |  2 +-
+ src/grd-rdp-dvc.c     |  2 ++
+ src/grd-rdp-private.h |  2 ++
+ src/grd-session-rdp.c | 14 ++++++++++++++
+ src/grd-session-rdp.h |  2 ++
+ src/grd-session.c     |  2 ++
+ src/grd-settings.c    |  1 +
+ src/grd-types.h       |  2 ++
+ src/meson.build       |  4 ++--
+ 9 files changed, 28 insertions(+), 3 deletions(-)
+
+diff --git a/meson.build b/meson.build
+index 5dcb77c3..041b771b 100644
+--- a/meson.build
++++ b/meson.build
+@@ -6,7 +6,7 @@ project('gnome-remote-desktop', 'c',
+ 
+ cuda_req = '>= 11.1.5.0'
+ epoxy_req = '>= 1.4'
+-freerdp_req = '>= 3.15.0'
++freerdp_req = '>= 3.10.0'
+ fuse_req = '>= 3.9.1'
+ polkit_req = '>= 122'
+ vulkan_req = '>= 1.2.0'
+diff --git a/src/grd-rdp-dvc.c b/src/grd-rdp-dvc.c
+index 65ec1554..4c2210b8 100644
+--- a/src/grd-rdp-dvc.c
++++ b/src/grd-rdp-dvc.c
+@@ -139,8 +139,10 @@ channel_to_string (GrdRdpChannel channel)
+       return "DISP";
+     case GRD_RDP_CHANNEL_GRAPHICS_PIPELINE:
+       return "RDPGFX";
++#if 0
+     case GRD_RDP_CHANNEL_INPUT:
+       return "INPUT";
++#endif
+     case GRD_RDP_CHANNEL_TELEMETRY:
+       return "TELEMETRY";
+     }
+diff --git a/src/grd-rdp-private.h b/src/grd-rdp-private.h
+index 29139b30..47057f1a 100644
+--- a/src/grd-rdp-private.h
++++ b/src/grd-rdp-private.h
+@@ -46,6 +46,8 @@ typedef struct _RdpPeerContext
+   GrdRdpDvcAudioPlayback *audio_playback;
+   GrdRdpDvcDisplayControl *display_control;
+   GrdRdpDvcGraphicsPipeline *graphics_pipeline;
++#if 0
+   GrdRdpDvcInput *input;
++#endif
+   GrdRdpDvcTelemetry *telemetry;
+ } RdpPeerContext;
+diff --git a/src/grd-session-rdp.c b/src/grd-session-rdp.c
+index cc026064..6cf0c4f1 100644
+--- a/src/grd-session-rdp.c
++++ b/src/grd-session-rdp.c
+@@ -37,7 +37,9 @@
+ #include "grd-rdp-dvc-display-control.h"
+ #include "grd-rdp-dvc-graphics-pipeline.h"
+ #include "grd-rdp-dvc-handler.h"
++#if 0
+ #include "grd-rdp-dvc-input.h"
++#endif
+ #include "grd-rdp-dvc-telemetry.h"
+ #include "grd-rdp-event-queue.h"
+ #include "grd-rdp-layout-manager.h"
+@@ -453,9 +455,11 @@ grd_session_rdp_tear_down_channel (GrdSessionRdp *session_rdp,
+     case GRD_RDP_CHANNEL_GRAPHICS_PIPELINE:
+       g_assert_not_reached ();
+       break;
++#if 0
+     case GRD_RDP_CHANNEL_INPUT:
+       g_clear_object (&rdp_peer_context->input);
+       break;
++#endif
+     case GRD_RDP_CHANNEL_TELEMETRY:
+       g_clear_object (&rdp_peer_context->telemetry);
+       break;
+@@ -1417,7 +1421,9 @@ socket_thread_func (gpointer data)
+         {
+           GrdRdpDvcTelemetry *telemetry;
+           GrdRdpDvcGraphicsPipeline *graphics_pipeline;
++#if 0
+           GrdRdpDvcInput *input;
++#endif
+           GrdRdpDvcAudioPlayback *audio_playback;
+           GrdRdpDvcDisplayControl *display_control;
+           GrdRdpDvcAudioInput *audio_input;
+@@ -1435,7 +1441,9 @@ socket_thread_func (gpointer data)
+               g_mutex_lock (&rdp_peer_context->channel_mutex);
+               telemetry = rdp_peer_context->telemetry;
+               graphics_pipeline = rdp_peer_context->graphics_pipeline;
++#if 0
+               input = rdp_peer_context->input;
++#endif
+               audio_playback = rdp_peer_context->audio_playback;
+               display_control = rdp_peer_context->display_control;
+               audio_input = rdp_peer_context->audio_input;
+@@ -1444,8 +1452,10 @@ socket_thread_func (gpointer data)
+                 grd_rdp_dvc_maybe_init (GRD_RDP_DVC (telemetry));
+               if (graphics_pipeline && !session_rdp->session_should_stop)
+                 grd_rdp_dvc_maybe_init (GRD_RDP_DVC (graphics_pipeline));
++#if 0
+               if (input && !session_rdp->session_should_stop)
+                 grd_rdp_dvc_maybe_init (GRD_RDP_DVC (input));
++#endif
+               if (audio_playback && !session_rdp->session_should_stop)
+                 grd_rdp_dvc_maybe_init (GRD_RDP_DVC (audio_playback));
+               if (display_control && !session_rdp->session_should_stop)
+@@ -1620,7 +1630,9 @@ grd_session_rdp_stop (GrdSession *session)
+   g_clear_object (&rdp_peer_context->clipboard_rdp);
+   g_clear_object (&rdp_peer_context->audio_playback);
+   g_clear_object (&rdp_peer_context->display_control);
++#if 0
+   g_clear_object (&rdp_peer_context->input);
++#endif
+   g_clear_object (&rdp_peer_context->graphics_pipeline);
+   g_clear_object (&rdp_peer_context->telemetry);
+   g_mutex_unlock (&rdp_peer_context->channel_mutex);
+@@ -1705,9 +1717,11 @@ initialize_remaining_virtual_channels (GrdSessionRdp *session_rdp)
+   GrdRdpDvcHandler *dvc_handler = rdp_peer_context->dvc_handler;
+   HANDLE vcm = rdp_peer_context->vcm;
+ 
++#if 0
+   rdp_peer_context->input =
+     grd_rdp_dvc_input_new (session_rdp->layout_manager,
+                            session_rdp, dvc_handler, vcm);
++#endif
+ 
+   if (session_rdp->screen_share_mode == GRD_RDP_SCREEN_SHARE_MODE_EXTEND)
+     {
+diff --git a/src/grd-session-rdp.h b/src/grd-session-rdp.h
+index d49dd43d..a6358e65 100644
+--- a/src/grd-session-rdp.h
++++ b/src/grd-session-rdp.h
+@@ -48,7 +48,9 @@ typedef enum _GrdRdpChannel
+   GRD_RDP_CHANNEL_AUDIO_PLAYBACK,
+   GRD_RDP_CHANNEL_DISPLAY_CONTROL,
+   GRD_RDP_CHANNEL_GRAPHICS_PIPELINE,
++#if 0
+   GRD_RDP_CHANNEL_INPUT,
++#endif
+   GRD_RDP_CHANNEL_TELEMETRY,
+ } GrdRdpChannel;
+ 
+diff --git a/src/grd-session.c b/src/grd-session.c
+index e247d342..7ced5d98 100644
+--- a/src/grd-session.c
++++ b/src/grd-session.c
+@@ -1440,7 +1440,9 @@ grd_ei_source_dispatch (gpointer user_data)
+                                      EI_DEVICE_CAP_POINTER_ABSOLUTE,
+                                      EI_DEVICE_CAP_BUTTON,
+                                      EI_DEVICE_CAP_SCROLL,
++#if 0
+                                      EI_DEVICE_CAP_TOUCH,
++#endif
+                                      NULL);
+           break;
+         case EI_EVENT_SEAT_REMOVED:
+diff --git a/src/grd-settings.c b/src/grd-settings.c
+index 8393ace5..e259a574 100644
+--- a/src/grd-settings.c
++++ b/src/grd-settings.c
+@@ -25,6 +25,7 @@
+ #include <gio/gio.h>
+ 
+ #ifdef HAVE_RDP
++#include <winpr/winpr.h>
+ #include <freerdp/freerdp.h>
+ #endif
+ 
+diff --git a/src/grd-types.h b/src/grd-types.h
+index 2b3f64f2..9ae6e8cb 100644
+--- a/src/grd-types.h
++++ b/src/grd-types.h
+@@ -50,7 +50,9 @@ typedef struct _GrdRdpDvcAudioPlayback GrdRdpDvcAudioPlayback;
+ typedef struct _GrdRdpDvcDisplayControl GrdRdpDvcDisplayControl;
+ typedef struct _GrdRdpDvcGraphicsPipeline GrdRdpDvcGraphicsPipeline;
+ typedef struct _GrdRdpDvcHandler GrdRdpDvcHandler;
++#if 0
+ typedef struct _GrdRdpDvcInput GrdRdpDvcInput;
++#endif
+ typedef struct _GrdRdpDvcTelemetry GrdRdpDvcTelemetry;
+ typedef struct _GrdRdpEventQueue GrdRdpEventQueue;
+ typedef struct _GrdRdpFrame GrdRdpFrame;
+diff --git a/src/meson.build b/src/meson.build
+index 1b2cb93d..ed671125 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -148,8 +148,8 @@ if have_rdp
+     'grd-rdp-dvc-graphics-pipeline.h',
+     'grd-rdp-dvc-handler.c',
+     'grd-rdp-dvc-handler.h',
+-    'grd-rdp-dvc-input.c',
+-    'grd-rdp-dvc-input.h',
++    #'grd-rdp-dvc-input.c',
++    #'grd-rdp-dvc-input.h',
+     'grd-rdp-dvc-telemetry.c',
+     'grd-rdp-dvc-telemetry.h',
+     'grd-rdp-event-queue.c',
+-- 
+2.51.0
+

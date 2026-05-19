@@ -1,4 +1,4 @@
-From 7a7a6d0757829f2efb2fc416b1ba55aa52216c4b Mon Sep 17 00:00:00 2001
+From 202114575558c4bd0573215ef0ce82deae9d9e73 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
 Date: Mon, 26 May 2025 16:08:54 +0200
 Subject: [PATCH 01/13] control: Allow controlling all daemon types
@@ -57,10 +57,10 @@ index 858ab10a..284cb113 100644
      {
        g_warning ("Failed to register with application\n");
 -- 
-2.49.0
+2.51.0
 
 
-From 8dcf988fb40ca328d685d3ca3cf2e7f5e2e19467 Mon Sep 17 00:00:00 2001
+From 1a627a3840de1a71f3a02860aeb3ef965b412f35 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
 Date: Mon, 26 May 2025 16:09:45 +0200
 Subject: [PATCH 02/13] daemon: Use GError auto pointer
@@ -70,10 +70,10 @@ Subject: [PATCH 02/13] daemon: Use GError auto pointer
  1 file changed, 1 insertion(+), 3 deletions(-)
 
 diff --git a/src/grd-daemon.c b/src/grd-daemon.c
-index b99f6181..2f6ed024 100644
+index c082c6b5..98954200 100644
 --- a/src/grd-daemon.c
 +++ b/src/grd-daemon.c
-@@ -986,7 +986,7 @@ main (int argc, char **argv)
+@@ -989,7 +989,7 @@ main (int argc, char **argv)
    };
    g_autoptr (GOptionContext) option_context = NULL;
    g_autoptr (GrdDaemon) daemon = NULL;
@@ -82,7 +82,7 @@ index b99f6181..2f6ed024 100644
    GrdRuntimeMode runtime_mode;
  
    g_set_application_name (_("GNOME Remote Desktop"));
-@@ -996,7 +996,6 @@ main (int argc, char **argv)
+@@ -999,7 +999,6 @@ main (int argc, char **argv)
    if (!g_option_context_parse (option_context, &argc, &argv, &error))
      {
        g_printerr ("Invalid option: %s\n", error->message);
@@ -90,7 +90,7 @@ index b99f6181..2f6ed024 100644
        return EXIT_FAILURE;
      }
  
-@@ -1045,7 +1044,6 @@ main (int argc, char **argv)
+@@ -1048,7 +1047,6 @@ main (int argc, char **argv)
    if (!daemon)
      {
        g_printerr ("Failed to initialize: %s\n", error->message);
@@ -99,10 +99,10 @@ index b99f6181..2f6ed024 100644
      }
  
 -- 
-2.49.0
+2.51.0
 
 
-From dfa19a9498f7245ac0ce3efd290dde1bdd8b865f Mon Sep 17 00:00:00 2001
+From ae398fb3a36a057af814312bfbd8d979120b8a27 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
 Date: Mon, 26 May 2025 17:04:45 +0200
 Subject: [PATCH 03/13] rdp-server: Remove empty constructor vfunc
@@ -113,10 +113,10 @@ No need to implement it if it doesn't do anything.
  1 file changed, 7 deletions(-)
 
 diff --git a/src/grd-rdp-server.c b/src/grd-rdp-server.c
-index 4fddfaa2..6ee93c5c 100644
+index c3124b8b..0ac486df 100644
 --- a/src/grd-rdp-server.c
 +++ b/src/grd-rdp-server.c
-@@ -470,12 +470,6 @@ grd_rdp_server_dispose (GObject *object)
+@@ -482,12 +482,6 @@ grd_rdp_server_dispose (GObject *object)
    G_OBJECT_CLASS (grd_rdp_server_parent_class)->dispose (object);
  }
  
@@ -129,7 +129,7 @@ index 4fddfaa2..6ee93c5c 100644
  static void
  grd_rdp_server_init (GrdRdpServer *rdp_server)
  {
-@@ -498,7 +492,6 @@ grd_rdp_server_class_init (GrdRdpServerClass *klass)
+@@ -510,7 +504,6 @@ grd_rdp_server_class_init (GrdRdpServerClass *klass)
    object_class->set_property = grd_rdp_server_set_property;
    object_class->get_property = grd_rdp_server_get_property;
    object_class->dispose = grd_rdp_server_dispose;
@@ -138,10 +138,10 @@ index 4fddfaa2..6ee93c5c 100644
    g_object_class_install_property (object_class,
                                     PROP_CONTEXT,
 -- 
-2.49.0
+2.51.0
 
 
-From 0a5400d11a032ae0e1b9e75bc72915b892713a77 Mon Sep 17 00:00:00 2001
+From 0f5071b5fd8d690f2fa49c5bec4d86c907c39281 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
 Date: Wed, 28 May 2025 14:08:12 +0200
 Subject: [PATCH 04/13] rdp-sam: Dup fd kept in struct
@@ -201,10 +201,10 @@ index 5898825a..bcadcb59 100644
    fclose (sam_file);
  
 -- 
-2.49.0
+2.51.0
 
 
-From 6a965f7c383a62e06a1dfb5033e7820ddff5c242 Mon Sep 17 00:00:00 2001
+From dfadd22d899a981804ff1b68358082ffb2bbe0c5 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
 Date: Wed, 28 May 2025 22:33:54 +0200
 Subject: [PATCH 05/13] rdp-server: Set socket backlog count to 5
@@ -215,10 +215,10 @@ This limits the number of pending connections.
  1 file changed, 4 insertions(+)
 
 diff --git a/src/grd-rdp-server.c b/src/grd-rdp-server.c
-index 6ee93c5c..537d4e30 100644
+index 0ac486df..2691a65d 100644
 --- a/src/grd-rdp-server.c
 +++ b/src/grd-rdp-server.c
-@@ -35,6 +35,7 @@
+@@ -36,6 +36,7 @@
  
  #define RDP_SERVER_N_BINDING_ATTEMPTS 10
  #define RDP_SERVER_BINDING_ATTEMPT_INTERVAL_MS 500
@@ -226,7 +226,7 @@ index 6ee93c5c..537d4e30 100644
  
  enum
  {
-@@ -302,6 +303,9 @@ bind_socket (GrdRdpServer  *rdp_server,
+@@ -312,6 +313,9 @@ bind_socket (GrdRdpServer  *rdp_server,
    uint16_t selected_rdp_port = 0;
    gboolean negotiate_port;
  
@@ -237,10 +237,10 @@ index 6ee93c5c..537d4e30 100644
                  "rdp-port", &rdp_port,
                  "rdp-negotiate-port", &negotiate_port,
 -- 
-2.49.0
+2.51.0
 
 
-From bc1ab53a393b886d3e5fae5b33efb8f2d3205fbc Mon Sep 17 00:00:00 2001
+From 1a5f6718c68695ec4221c530c0427061f2e50ac9 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
 Date: Wed, 28 May 2025 22:55:20 +0200
 Subject: [PATCH 06/13] utils: Add some time conversion helpers
@@ -251,13 +251,14 @@ Useful when converting between second, microseconds, etc.
  1 file changed, 18 insertions(+)
 
 diff --git a/src/grd-utils.h b/src/grd-utils.h
-index 6e433246..d9ae0801 100644
+index 30a3b9ec..099da563 100644
 --- a/src/grd-utils.h
 +++ b/src/grd-utils.h
-@@ -98,4 +98,22 @@ gboolean grd_systemd_unit_get_active_state (GDBusProxy                 *unit_pro
+@@ -99,3 +99,21 @@ gboolean grd_systemd_get_unit (GBusType     bus_type,
+ gboolean grd_systemd_unit_get_active_state (GDBusProxy                 *unit_proxy,
                                              GrdSystemdUnitActiveState  *active_state,
                                              GError                    **error);
- 
++
 +static inline int64_t
 +us (int64_t us)
 +{
@@ -275,13 +276,11 @@ index 6e433246..d9ae0801 100644
 +{
 +  return ms2us (s * 1000);
 +}
-+
- #endif /* GRD_UTILS_H */
 -- 
-2.49.0
+2.51.0
 
 
-From 0f90337b241b200fc33565d49b6344e43d93bd0c Mon Sep 17 00:00:00 2001
+From 1abd4d5bb0840965a0a01d2230a8e0fa63768f52 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
 Date: Mon, 30 Jun 2025 16:16:31 +0200
 Subject: [PATCH 07/13] utils: Add helper to close connection and notify
@@ -295,10 +294,10 @@ to date.
  2 files changed, 9 insertions(+)
 
 diff --git a/src/grd-utils.c b/src/grd-utils.c
-index 9ded2092..20e6bffa 100644
+index 32739a93..bf208828 100644
 --- a/src/grd-utils.c
 +++ b/src/grd-utils.c
-@@ -461,3 +461,10 @@ grd_systemd_unit_get_active_state (GDBusProxy                 *unit_proxy,
+@@ -478,3 +478,10 @@ grd_systemd_unit_get_active_state (GDBusProxy                 *unit_proxy,
  
    return TRUE;
  }
@@ -310,10 +309,10 @@ index 9ded2092..20e6bffa 100644
 +  g_object_notify (G_OBJECT (connection), "closed");
 +}
 diff --git a/src/grd-utils.h b/src/grd-utils.h
-index d9ae0801..eeb0a01c 100644
+index 099da563..4703db8f 100644
 --- a/src/grd-utils.h
 +++ b/src/grd-utils.h
-@@ -98,6 +98,8 @@ gboolean grd_systemd_unit_get_active_state (GDBusProxy                 *unit_pro
+@@ -100,6 +100,8 @@ gboolean grd_systemd_unit_get_active_state (GDBusProxy                 *unit_pro
                                              GrdSystemdUnitActiveState  *active_state,
                                              GError                    **error);
  
@@ -323,10 +322,10 @@ index d9ae0801..eeb0a01c 100644
  us (int64_t us)
  {
 -- 
-2.49.0
+2.51.0
 
 
-From 4e09eee9a71e8da5bc1fb0fcaac999fc8efff953 Mon Sep 17 00:00:00 2001
+From 8dccf29b75560838843b0b373bcb6346548211c4 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
 Date: Wed, 28 May 2025 22:40:38 +0200
 Subject: [PATCH 08/13] Introduce throttler class
@@ -878,10 +877,10 @@ index 00000000..d57d653a
 +
 +#endif /* GRD_THROTTLER_H */
 diff --git a/src/meson.build b/src/meson.build
-index f92f9f1e..1e2cc69c 100644
+index 6b8b517e..3cc63c8b 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -72,6 +72,8 @@ daemon_sources = files([
+@@ -74,6 +74,8 @@ daemon_sources = files([
    'grd-settings-user.h',
    'grd-stream.c',
    'grd-stream.h',
@@ -891,10 +890,10 @@ index f92f9f1e..1e2cc69c 100644
    'grd-utils.c',
    'grd-utils.h',
 -- 
-2.49.0
+2.51.0
 
 
-From 1dbffe778f0392a64c69152083290f125bfb450f Mon Sep 17 00:00:00 2001
+From f5e80ab4c6db6e15adebefc11d716f57af8e2eb3 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
 Date: Wed, 28 May 2025 22:46:27 +0200
 Subject: [PATCH 09/13] rdp-server: Throttle connections using GrdThrottler
@@ -908,18 +907,18 @@ Related: CVE-2025-5024
  2 files changed, 29 insertions(+), 4 deletions(-)
 
 diff --git a/src/grd-rdp-server.c b/src/grd-rdp-server.c
-index 537d4e30..228939b5 100644
+index 2691a65d..b8622a13 100644
 --- a/src/grd-rdp-server.c
 +++ b/src/grd-rdp-server.c
-@@ -31,6 +31,7 @@
- #include "grd-context.h"
- #include "grd-hwaccel-nvidia.h"
+@@ -32,6 +32,7 @@
+ #include "grd-hwaccel-vulkan.h"
+ #include "grd-rdp-routing-token.h"
  #include "grd-session-rdp.h"
 +#include "grd-throttler.h"
  #include "grd-utils.h"
  
  #define RDP_SERVER_N_BINDING_ATTEMPTS 10
-@@ -59,6 +60,8 @@ struct _GrdRdpServer
+@@ -60,6 +61,8 @@ struct _GrdRdpServer
  {
    GSocketService parent;
  
@@ -928,7 +927,7 @@ index 537d4e30..228939b5 100644
    GList *sessions;
  
    GList *stopped_sessions;
-@@ -216,13 +219,25 @@ on_incoming (GSocketService    *service,
+@@ -225,14 +228,26 @@ on_incoming (GSocketService    *service,
               GSocketConnection *connection)
  {
    GrdRdpServer *rdp_server = GRD_RDP_SERVER (service);
@@ -950,13 +949,14 @@ index 537d4e30..228939b5 100644
 +  g_debug ("Creating new RDP session");
  
    if (!(session_rdp = grd_session_rdp_new (rdp_server, connection,
+                                            rdp_server->hwaccel_vulkan,
                                             rdp_server->hwaccel_nvidia)))
 -    return TRUE;
 +    return;
  
    rdp_server->sessions = g_list_append (rdp_server->sessions, session_rdp);
  
-@@ -233,8 +248,6 @@ on_incoming (GSocketService    *service,
+@@ -243,8 +258,6 @@ on_incoming (GSocketService    *service,
    g_signal_connect (session_rdp, "post-connected",
                      G_CALLBACK (on_session_post_connect),
                      rdp_server);
@@ -965,7 +965,7 @@ index 537d4e30..228939b5 100644
  }
  
  void
-@@ -410,6 +423,8 @@ grd_rdp_server_stop (GrdRdpServer *rdp_server)
+@@ -420,6 +433,8 @@ grd_rdp_server_stop (GrdRdpServer *rdp_server)
    g_clear_handle_id (&rdp_server->cleanup_sessions_idle_id, g_source_remove);
    grd_rdp_server_cleanup_stopped_sessions (rdp_server);
  
@@ -974,15 +974,15 @@ index 537d4e30..228939b5 100644
    if (rdp_server->cancellable)
      {
        g_cancellable_cancel (rdp_server->cancellable);
-@@ -468,6 +483,7 @@ grd_rdp_server_dispose (GObject *object)
+@@ -479,6 +494,7 @@ grd_rdp_server_dispose (GObject *object)
    g_assert (!rdp_server->binding_timeout_source_id);
    g_assert (!rdp_server->cleanup_sessions_idle_id);
    g_assert (!rdp_server->stopped_sessions);
 +  g_assert (!rdp_server->throttler);
  
    g_assert (!rdp_server->hwaccel_nvidia);
- 
-@@ -477,6 +493,9 @@ grd_rdp_server_dispose (GObject *object)
+   g_assert (!rdp_server->hwaccel_vulkan);
+@@ -489,6 +505,9 @@ grd_rdp_server_dispose (GObject *object)
  static void
  grd_rdp_server_init (GrdRdpServer *rdp_server)
  {
@@ -993,18 +993,18 @@ index 537d4e30..228939b5 100644
  
    winpr_InitializeSSL (WINPR_SSL_INIT_DEFAULT);
 diff --git a/src/grd-session-rdp.c b/src/grd-session-rdp.c
-index 3bf1fb7a..bdccc981 100644
+index cc026064..fcebadd1 100644
 --- a/src/grd-session-rdp.c
 +++ b/src/grd-session-rdp.c
-@@ -47,6 +47,7 @@
+@@ -48,6 +48,7 @@
+ #include "grd-rdp-server.h"
  #include "grd-rdp-session-metrics.h"
- #include "grd-rdp-telemetry.h"
  #include "grd-settings.h"
 +#include "grd-utils.h"
  
  #define MAX_MONITOR_COUNT_HEADLESS 16
  #define MAX_MONITOR_COUNT_SCREEN_SHARE 1
-@@ -1577,6 +1578,7 @@ grd_session_rdp_stop (GrdSession *session)
+@@ -1635,6 +1636,7 @@ grd_session_rdp_stop (GrdSession *session)
    g_clear_object (&session_rdp->renderer);
  
    peer->Close (peer);
@@ -1012,9 +1012,9 @@ index 3bf1fb7a..bdccc981 100644
    g_clear_object (&session_rdp->connection);
  
    g_clear_object (&rdp_peer_context->network_autodetection);
-@@ -1761,6 +1763,10 @@ grd_session_rdp_dispose (GObject *object)
-   g_clear_object (&session_rdp->layout_manager);
+@@ -1835,6 +1837,10 @@ grd_session_rdp_dispose (GObject *object)
    clear_rdp_peer (session_rdp);
+   g_clear_object (&session_rdp->connection);
  
 +  if (session_rdp->connection)
 +    grd_close_connection_and_notify (session_rdp->connection);
@@ -1024,10 +1024,10 @@ index 3bf1fb7a..bdccc981 100644
  
    g_clear_object (&session_rdp->rdp_event_queue);
 -- 
-2.49.0
+2.51.0
 
 
-From 61aa2a856d920ecc64abf38dfb1ca089f2626192 Mon Sep 17 00:00:00 2001
+From 13dfafb9b24964919a513f3d787101390697e62a Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
 Date: Fri, 30 May 2025 16:54:00 +0200
 Subject: [PATCH 10/13] throttler: Introduce limits struct
@@ -1042,10 +1042,10 @@ session at a time, replacing it's own existing condition.
  3 files changed, 67 insertions(+), 14 deletions(-)
 
 diff --git a/src/grd-rdp-server.c b/src/grd-rdp-server.c
-index 228939b5..207d9e2d 100644
+index b8622a13..43eb2925 100644
 --- a/src/grd-rdp-server.c
 +++ b/src/grd-rdp-server.c
-@@ -493,7 +493,8 @@ grd_rdp_server_dispose (GObject *object)
+@@ -505,7 +505,8 @@ grd_rdp_server_dispose (GObject *object)
  static void
  grd_rdp_server_init (GrdRdpServer *rdp_server)
  {
@@ -1239,10 +1239,10 @@ index d57d653a..9e72b8f1 100644
  
  #endif /* GRD_THROTTLER_H */
 -- 
-2.49.0
+2.51.0
 
 
-From a0fa2c8afb072d2aa0886012925eccc36c2cdfb9 Mon Sep 17 00:00:00 2001
+From 296492022673e322df037c2fe9baa6b485887676 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
 Date: Fri, 30 May 2025 16:55:46 +0200
 Subject: [PATCH 11/13] vnc-server: Hook up VNC server to the throttler
@@ -1255,7 +1255,7 @@ limiting the throttler to one accepted connection at any given time.
  2 files changed, 37 insertions(+), 13 deletions(-)
 
 diff --git a/src/grd-session-vnc.c b/src/grd-session-vnc.c
-index 6e118d88..8f4caec0 100644
+index 87cc7d86..ba0926f2 100644
 --- a/src/grd-session-vnc.c
 +++ b/src/grd-session-vnc.c
 @@ -34,6 +34,7 @@
@@ -1387,10 +1387,10 @@ index 2f8229b2..fc5020f0 100644
  
  static void
 -- 
-2.49.0
+2.51.0
 
 
-From 5ba32deb4fca13b0a56d724f1bf79c5c76c39154 Mon Sep 17 00:00:00 2001
+From a57cf99969a71a44eabca06fbf5e548310fcb9e4 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
 Date: Mon, 30 Jun 2025 16:01:12 +0200
 Subject: [PATCH 12/13] daemon: Add missing newline to error message
@@ -1400,10 +1400,10 @@ Subject: [PATCH 12/13] daemon: Add missing newline to error message
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/src/grd-daemon.c b/src/grd-daemon.c
-index 2f6ed024..2802bb1e 100644
+index 98954200..ea17df1d 100644
 --- a/src/grd-daemon.c
 +++ b/src/grd-daemon.c
-@@ -1007,7 +1007,7 @@ main (int argc, char **argv)
+@@ -1010,7 +1010,7 @@ main (int argc, char **argv)
  
    if (count_trues (3, headless, system, handover) > 1)
      {
@@ -1413,10 +1413,10 @@ index 2f6ed024..2802bb1e 100644
      }
  
 -- 
-2.49.0
+2.51.0
 
 
-From e94d1dd3015df17e88a7ee78f45d79aadfd45be6 Mon Sep 17 00:00:00 2001
+From 97e2e5d6f42f102cdeec962ce83887a4920b1b48 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
 Date: Mon, 30 Jun 2025 16:01:37 +0200
 Subject: [PATCH 13/13] throttler: Allow overriding hard coded parallel
@@ -1438,10 +1438,10 @@ number of open file descriptors to something adequate.
  7 files changed, 81 insertions(+), 17 deletions(-)
 
 diff --git a/src/grd-daemon.c b/src/grd-daemon.c
-index 2802bb1e..c04475a7 100644
+index ea17df1d..7e1a0a34 100644
 --- a/src/grd-daemon.c
 +++ b/src/grd-daemon.c
-@@ -48,6 +48,8 @@
+@@ -49,6 +49,8 @@
  
  #define RDP_SERVER_RESTART_DELAY_MS 3000
  
@@ -1450,7 +1450,7 @@ index 2802bb1e..c04475a7 100644
  enum
  {
    PROP_0,
-@@ -91,6 +93,9 @@ typedef struct _GrdDaemonPrivate
+@@ -92,6 +94,9 @@ typedef struct _GrdDaemonPrivate
  
  G_DEFINE_TYPE_WITH_PRIVATE (GrdDaemon, grd_daemon, G_TYPE_APPLICATION)
  
@@ -1460,7 +1460,7 @@ index 2802bb1e..c04475a7 100644
  #ifdef HAVE_RDP
  static void maybe_start_rdp_server (GrdDaemon *daemon);
  #endif
-@@ -966,6 +971,7 @@ main (int argc, char **argv)
+@@ -969,6 +974,7 @@ main (int argc, char **argv)
    gboolean handover = FALSE;
    int rdp_port = -1;
    int vnc_port = -1;
@@ -1468,7 +1468,7 @@ index 2802bb1e..c04475a7 100644
  
    GOptionEntry entries[] = {
      { "version", 0, 0, G_OPTION_ARG_NONE, &print_version,
-@@ -982,6 +988,10 @@ main (int argc, char **argv)
+@@ -985,6 +991,10 @@ main (int argc, char **argv)
        "RDP port", NULL },
      { "vnc-port", 0, 0, G_OPTION_ARG_INT, &vnc_port,
        "VNC port", NULL },
@@ -1479,7 +1479,7 @@ index 2802bb1e..c04475a7 100644
      { NULL }
    };
    g_autoptr (GOptionContext) option_context = NULL;
-@@ -1011,6 +1021,17 @@ main (int argc, char **argv)
+@@ -1014,6 +1024,17 @@ main (int argc, char **argv)
        return EXIT_FAILURE;
      }
  
@@ -1497,7 +1497,7 @@ index 2802bb1e..c04475a7 100644
    if (headless)
      runtime_mode = GRD_RUNTIME_MODE_HEADLESS;
    else if (system)
-@@ -1057,5 +1078,8 @@ main (int argc, char **argv)
+@@ -1060,5 +1081,8 @@ main (int argc, char **argv)
    if (vnc_port != -1)
      grd_settings_override_vnc_port (settings, vnc_port);
  
@@ -1507,10 +1507,10 @@ index 2802bb1e..c04475a7 100644
    return g_application_run (G_APPLICATION (daemon), argc, argv);
  }
 diff --git a/src/grd-rdp-server.c b/src/grd-rdp-server.c
-index 207d9e2d..b4952935 100644
+index 43eb2925..be1c315e 100644
 --- a/src/grd-rdp-server.c
 +++ b/src/grd-rdp-server.c
-@@ -491,11 +491,14 @@ grd_rdp_server_dispose (GObject *object)
+@@ -503,11 +503,14 @@ grd_rdp_server_dispose (GObject *object)
  }
  
  static void
@@ -1529,7 +1529,7 @@ index 207d9e2d..b4952935 100644
  
    rdp_server->pending_binding_attempts = RDP_SERVER_N_BINDING_ATTEMPTS;
  
-@@ -506,6 +509,13 @@ grd_rdp_server_init (GrdRdpServer *rdp_server)
+@@ -518,6 +521,13 @@ grd_rdp_server_init (GrdRdpServer *rdp_server)
     * Run the primitives benchmark here to save time, when initializing a session
     */
    primitives_get ();
@@ -1543,7 +1543,7 @@ index 207d9e2d..b4952935 100644
  }
  
  static void
-@@ -516,6 +526,7 @@ grd_rdp_server_class_init (GrdRdpServerClass *klass)
+@@ -528,6 +538,7 @@ grd_rdp_server_class_init (GrdRdpServerClass *klass)
    object_class->set_property = grd_rdp_server_set_property;
    object_class->get_property = grd_rdp_server_get_property;
    object_class->dispose = grd_rdp_server_dispose;
@@ -1552,7 +1552,7 @@ index 207d9e2d..b4952935 100644
    g_object_class_install_property (object_class,
                                     PROP_CONTEXT,
 diff --git a/src/grd-settings.c b/src/grd-settings.c
-index f3475010..0720fcc4 100644
+index a65385ef..46b8ad4b 100644
 --- a/src/grd-settings.c
 +++ b/src/grd-settings.c
 @@ -87,6 +87,8 @@ typedef struct _GrdSettingsPrivate
@@ -1589,10 +1589,10 @@ index f3475010..0720fcc4 100644
  grd_settings_override_rdp_port (GrdSettings *settings,
                                  int          port)
 diff --git a/src/grd-settings.h b/src/grd-settings.h
-index 547b1417..5abf8e4e 100644
+index 6660b962..94dfd3b2 100644
 --- a/src/grd-settings.h
 +++ b/src/grd-settings.h
-@@ -38,6 +38,11 @@ struct _GrdSettingsClass
+@@ -37,6 +37,11 @@ struct _GrdSettingsClass
  
  GrdRuntimeMode grd_settings_get_runtime_mode (GrdSettings *settings);
  
@@ -1702,5 +1702,5 @@ index fc5020f0..705ed416 100644
  
  static void
 -- 
-2.49.0
+2.51.0
 
