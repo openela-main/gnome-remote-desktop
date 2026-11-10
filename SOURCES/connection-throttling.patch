@@ -942,25 +942,11 @@ Related: CVE-2025-5024
 Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/321>
 (cherry picked from commit 959cd39ae528a6751d94b0dcff173a470a5bc7ef)
 ---
- meson.build             |   2 +-
  src/grd-daemon-system.c |   4 ++
  src/grd-rdp-server.c    | 100 ++++++++++++++++++++++++++++++++--------
  src/grd-session-rdp.c   |   5 ++
- 4 files changed, 92 insertions(+), 19 deletions(-)
+ 3 files changed, 92 insertions(+), 19 deletions(-)
 
-diff --git a/meson.build b/meson.build
-index 11c8b466..c71c892d 100644
---- a/meson.build
-+++ b/meson.build
-@@ -116,7 +116,7 @@ cdata.set_quoted('GRD_USERNAME', grd_username)
- cdata.set_quoted('GRD_SHADER_DIR', grd_shaderdir)
- 
- # Workaround for https://github.com/FreeRDP/FreeRDP/issues/11412
--cdata.set('WITHOUT_FREERDP_3x_DEPRECATED', true)
-+#cdata.set('WITHOUT_FREERDP_3x_DEPRECATED', true)
- 
- configure_file(input: 'config.h.meson',
-                output: 'config.h',
 diff --git a/src/grd-daemon-system.c b/src/grd-daemon-system.c
 index 82299781..a8dc8dfd 100644
 --- a/src/grd-daemon-system.c

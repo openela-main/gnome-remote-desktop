@@ -53,7 +53,7 @@ index 3c9e34f..40fed79 100644
 +{
 +  gboolean handover_is_waiting;
 +
-+  handover_is_waiting = 
++  handover_is_waiting =
 +    grd_dbus_remote_desktop_rdp_handover_get_handover_is_waiting (
 +      daemon_handover->remote_desktop_handover);
 +
@@ -104,7 +104,7 @@ index 3c9e34f..40fed79 100644
 -{
 -  gboolean handover_is_waiting;
 -
--  handover_is_waiting = 
+-  handover_is_waiting =
 -    grd_dbus_remote_desktop_rdp_handover_get_handover_is_waiting (
 -      daemon_handover->remote_desktop_handover);
 -
@@ -469,7 +469,7 @@ index 95b5a54..709f14b 100644
 +  GrdDaemonHandover *daemon_handover;
 +
 +  manager =
-+    grd_dbus_remote_desktop_object_manager_client_new_for_bus_finish (result, 
++    grd_dbus_remote_desktop_object_manager_client_new_for_bus_finish (result,
 +                                                                      &error);
 +  if (!manager)
 +    {

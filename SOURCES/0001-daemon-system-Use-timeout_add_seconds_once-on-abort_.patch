@@ -639,7 +639,7 @@ index d32ec8ff..7343c9e1 100644
 +                    G_CALLBACK (on_authorize_handover_method),
 +                    new_remote_client);
 +  g_signal_connect (handover->interface, "handle-start-handover",
-+                    G_CALLBACK (on_handle_start_handover), 
++                    G_CALLBACK (on_handle_start_handover),
 +                    new_remote_client);
 +  g_signal_connect (handover->interface, "handle-take-client",
 +                    G_CALLBACK (on_handle_take_client),
@@ -835,7 +835,7 @@ index a9ec8d8e..3c9e34f4 100644
  {
 +  gboolean handover_is_waiting;
 +
-+  handover_is_waiting = 
++  handover_is_waiting =
 +    grd_dbus_remote_desktop_rdp_handover_get_handover_is_waiting (
 +      daemon_handover->remote_desktop_handover);
 +
