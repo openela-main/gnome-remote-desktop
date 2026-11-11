@@ -1,0 +1,2454 @@
+From 015ed46154b51be7563f0332d7768c8dc236f470 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Fri, 23 Jan 2026 11:17:03 +0100
+Subject: [PATCH 01/22] Allow configuring RDP authentication mechanism
+
+This currently is a useless configuration, since it only allows setting
+'credentials' (meaning username/password combination), but it's meant to
+be preparatory plumbing for adding Kerberos authentication.
+
+It's currently only added for the single user headless mode, and
+screen share mode.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/369>
+---
+ src/grd-configuration.c                       |  3 +
+ src/grd-ctl.c                                 | 63 +++++++++++++++++++
+ src/grd-daemon.c                              | 15 +++++
+ src/grd-enums.h                               |  5 ++
+ src/grd-settings-headless.c                   |  3 +
+ src/grd-settings-user.c                       |  3 +
+ src/grd-settings.c                            | 18 ++++++
+ src/org.gnome.RemoteDesktop.xml               |  2 +
+ ...nome.desktop.remote-desktop.gschema.xml.in | 18 ++++++
+ 9 files changed, 130 insertions(+)
+
+diff --git a/src/grd-configuration.c b/src/grd-configuration.c
+index 0e13329c..d48b40c5 100644
+--- a/src/grd-configuration.c
++++ b/src/grd-configuration.c
+@@ -645,6 +645,9 @@ grd_configuration_startup (GApplication *application)
+   g_object_bind_property (configuration->settings, "rdp-server-key-path",
+                           configuration->configuration_rdp_server, "tls-key",
+                           G_BINDING_SYNC_CREATE);
++  g_object_bind_property (configuration->settings, "rdp-auth-methods",
++                          configuration->configuration_rdp_server, "auth-methods",
++                          G_BINDING_SYNC_CREATE);
+   g_signal_connect_object (configuration->configuration_rdp_server, "handle-enable",
+                            G_CALLBACK (on_handle_enable),
+                            configuration, 0);
+diff --git a/src/grd-ctl.c b/src/grd-ctl.c
+index f07a534e..dc480592 100644
+--- a/src/grd-ctl.c
++++ b/src/grd-ctl.c
+@@ -255,6 +255,43 @@ rdp_disable (GrdSettings  *settings,
+   return TRUE;
+ }
+ 
++static gboolean
++rdp_set_auth_methods (GrdSettings  *settings,
++                      int           argc,
++                      char        **argv,
++                      GError      **error)
++{
++  char *auth_methods_string = argv[0];
++  g_auto (GStrv) auth_method_strings = NULL;
++  char **auth_method;
++  GrdRdpAuthMethods auth_methods = 0;
++
++  auth_method_strings = g_strsplit (auth_methods_string, ",", -1);
++  for (auth_method = auth_method_strings; *auth_method; auth_method++)
++    {
++      if (g_strcmp0 (*auth_method, "credentials") == 0)
++        {
++          auth_methods |= GRD_RDP_AUTH_METHOD_CREDENTIALS;
++        }
++      else
++        {
++          g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
++                       "Invalid auth method '%s'", *auth_method);
++          return FALSE;
++        }
++    }
++
++  if (!auth_methods)
++    {
++      g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
++                   "No auth method selected");
++      return FALSE;
++    }
++
++  g_object_set (G_OBJECT (settings), "rdp-auth-methods", auth_methods, NULL);
++  return TRUE;
++}
++
+ static gboolean
+ rdp_set_tls_cert (GrdSettings  *settings,
+                   int           argc,
+@@ -382,6 +419,7 @@ static const SubCommand rdp_subcommands[] = {
+   { "set-port", rdp_set_port, 1 },
+   { "enable", rdp_enable, 0 },
+   { "disable", rdp_disable, 0 },
++  { "set-auth-methods", rdp_set_auth_methods, 1 },
+   { "set-tls-cert", rdp_set_tls_cert, 1 },
+   { "set-tls-key", rdp_set_tls_key, 1 },
+   { "set-credentials", rdp_set_credentials, 0 },
+@@ -611,6 +649,9 @@ print_help (void)
+       "    set-port                                     - Set port the server binds to\n"
+       "    enable                                       - Enable the RDP backend\n"
+       "    disable                                      - Disable the RDP backend\n"
++      "    set-auth-methods <list-of-methods>           - Set a comma separated list of\n"
++      "                                                   allowed authentication methods\n"
++      "                                                   (credentials)\n"
+       "    set-tls-cert <path-to-cert>                  - Set path to TLS certificate\n"
+       "    set-tls-key <path-to-key>                    - Set path to TLS key\n"
+       "    set-credentials [<username> [<password>]]    - Set username and password\n"
+@@ -718,11 +759,29 @@ status_to_string (gboolean enabled,
+ }
+ 
+ #ifdef HAVE_RDP
++
++static char *
++generate_auth_methods_string (GrdRdpAuthMethods auth_methods)
++{
++  g_autoptr (GStrvBuilder) builder = NULL;
++  g_auto (GStrv) auth_method_strings = NULL;
++
++  builder = g_strv_builder_new ();
++  if (auth_methods & GRD_RDP_AUTH_METHOD_CREDENTIALS)
++    g_strv_builder_add (builder, "credentials");
++
++  auth_method_strings = g_strv_builder_end (builder);
++
++  return g_strjoinv (", ", auth_method_strings);
++}
++
+ static void
+ print_rdp_status (GrdSettings *settings,
+                   gboolean     use_colors,
+                   gboolean     show_credentials)
+ {
++  GrdRdpAuthMethods auth_methods = 0;
++  g_autofree char *auth_methods_string = NULL;
+   g_autofree char *tls_fingerprint = NULL;
+   g_autofree char *tls_cert = NULL;
+   g_autofree char *tls_key = NULL;
+@@ -735,6 +794,7 @@ print_rdp_status (GrdSettings *settings,
+   int port;
+ 
+   g_object_get (G_OBJECT (settings),
++                "rdp-auth-methods", &auth_methods,
+                 "rdp-server-fingerprint", &tls_fingerprint,
+                 "rdp-server-cert-path", &tls_cert,
+                 "rdp-server-key-path", &tls_key,
+@@ -744,9 +804,12 @@ print_rdp_status (GrdSettings *settings,
+                 "rdp-port", &port,
+                 NULL);
+ 
++  auth_methods_string = generate_auth_methods_string (auth_methods);
++
+   printf ("RDP:\n");
+   printf ("\tStatus: %s\n", status_to_string (enabled, use_colors));
+   printf ("\tPort: %d\n", port);
++  printf ("\tAuthentication methods: %s\n", auth_methods_string);
+   printf ("\tTLS certificate: %s\n", tls_cert);
+   printf ("\tTLS fingerprint: %s\n", tls_fingerprint);
+   printf ("\tTLS key: %s\n", tls_key);
+diff --git a/src/grd-daemon.c b/src/grd-daemon.c
+index 9e18b1d1..ebb9d685 100644
+--- a/src/grd-daemon.c
++++ b/src/grd-daemon.c
+@@ -219,6 +219,9 @@ export_rdp_server_interface (GrdDaemon *daemon)
+   g_object_bind_property (settings, "rdp-server-key-path",
+                           rdp_server_interface, "tls-key",
+                           G_BINDING_SYNC_CREATE);
++  g_object_bind_property (settings, "rdp-auth-methods",
++                          rdp_server_interface, "auth-methods",
++                          G_BINDING_SYNC_CREATE);
+   g_object_bind_property (settings, "rdp-view-only",
+                           rdp_server_interface, "view-only",
+                           G_BINDING_SYNC_CREATE);
+@@ -267,6 +270,10 @@ start_rdp_server_when_ready (GrdDaemon *daemon,
+                            "notify::rdp-server-key",
+                            G_CALLBACK (maybe_start_rdp_server),
+                            daemon, G_CONNECT_SWAPPED);
++  g_signal_connect_object (G_OBJECT (settings),
++                           "notify::rdp-auth-methods",
++                           G_CALLBACK (maybe_start_rdp_server),
++                           daemon, G_CONNECT_SWAPPED);
+ }
+ 
+ static void
+@@ -423,6 +430,7 @@ maybe_start_rdp_server (GrdDaemon *daemon)
+   GrdDaemonPrivate *priv = grd_daemon_get_instance_private (daemon);
+   GrdSettings *settings = grd_context_get_settings (priv->context);
+   g_autoptr (GError) error = NULL;
++  GrdRdpAuthMethods auth_methods = 0;
+   g_autofree char *certificate = NULL;
+   g_autofree char *key = NULL;
+   gboolean rdp_enabled = FALSE;
+@@ -435,6 +443,7 @@ maybe_start_rdp_server (GrdDaemon *daemon)
+ 
+   g_object_get (G_OBJECT (settings),
+                 "rdp-enabled", &rdp_enabled,
++                "rdp-auth-methods", &auth_methods,
+                 "rdp-server-cert", &certificate,
+                 "rdp-server-key", &key,
+                 NULL);
+@@ -442,6 +451,12 @@ maybe_start_rdp_server (GrdDaemon *daemon)
+   if (!rdp_enabled)
+     return;
+ 
++  if (!auth_methods)
++    {
++      g_warning ("No RDP auth methods configured, not enabling server.");
++      return;
++    }
++
+   if ((certificate && key) ||
+       grd_context_get_runtime_mode (priv->context) == GRD_RUNTIME_MODE_HANDOVER)
+     {
+diff --git a/src/grd-enums.h b/src/grd-enums.h
+index f4438764..dcc80565 100644
+--- a/src/grd-enums.h
++++ b/src/grd-enums.h
+@@ -51,3 +51,8 @@ typedef enum
+   GRD_RUNTIME_MODE_SYSTEM,
+   GRD_RUNTIME_MODE_HANDOVER,
+ } GrdRuntimeMode;
++
++typedef enum
++{
++  GRD_RDP_AUTH_METHOD_CREDENTIALS = 1 << 0,
++} GrdRdpAuthMethods;
+diff --git a/src/grd-settings-headless.c b/src/grd-settings-headless.c
+index 003c82eb..d1191e78 100644
+--- a/src/grd-settings-headless.c
++++ b/src/grd-settings-headless.c
+@@ -68,6 +68,9 @@ grd_settings_headless_constructed (GObject *object)
+   g_settings_bind (settings->rdp_settings, "negotiate-port",
+                    settings, "rdp-negotiate-port",
+                    G_SETTINGS_BIND_DEFAULT);
++  g_settings_bind (settings->rdp_settings, "auth-methods",
++                   settings, "rdp-auth-methods",
++                   G_SETTINGS_BIND_DEFAULT);
+   g_settings_bind (settings->common_rdp_settings, "tls-cert",
+                    settings, "rdp-server-cert-path",
+                    G_SETTINGS_BIND_DEFAULT);
+diff --git a/src/grd-settings-user.c b/src/grd-settings-user.c
+index 9420516f..172ac5c6 100644
+--- a/src/grd-settings-user.c
++++ b/src/grd-settings-user.c
+@@ -73,6 +73,9 @@ grd_settings_user_constructed (GObject *object)
+   g_settings_bind (settings->rdp_settings, "screen-share-mode",
+                    settings, "rdp-screen-share-mode",
+                    G_SETTINGS_BIND_DEFAULT);
++  g_settings_bind (settings->rdp_settings, "auth-methods",
++                   settings, "rdp-auth-methods",
++                   G_SETTINGS_BIND_DEFAULT);
+   g_settings_bind (settings->vnc_settings, "enable",
+                    settings, "vnc-enabled",
+                    G_SETTINGS_BIND_DEFAULT);
+diff --git a/src/grd-settings.c b/src/grd-settings.c
+index f4d3b190..dbc1cade 100644
+--- a/src/grd-settings.c
++++ b/src/grd-settings.c
+@@ -60,6 +60,7 @@ enum
+   PROP_RDP_SERVER_KEY_PATH,
+   PROP_VNC_AUTH_METHOD,
+   PROP_VNC_ENCRYPTION,
++  PROP_RDP_AUTH_METHODS,
+ };
+ 
+ typedef struct _GrdSettingsPrivate
+@@ -73,6 +74,7 @@ typedef struct _GrdSettingsPrivate
+     gboolean is_enabled;
+     gboolean view_only;
+     GrdRdpScreenShareMode screen_share_mode;
++    GrdRdpAuthMethods auth_methods;
+     char *server_cert;
+     char *server_fingerprint;
+     char *server_key;
+@@ -451,6 +453,9 @@ grd_settings_get_property (GObject    *object,
+     case PROP_VNC_ENCRYPTION:
+       g_value_set_flags (value, priv->vnc.encryption);
+       break;
++    case PROP_RDP_AUTH_METHODS:
++      g_value_set_flags (value, priv->rdp.auth_methods);
++      break;
+     default:
+       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+     }
+@@ -591,6 +596,9 @@ grd_settings_set_property (GObject      *object,
+     case PROP_VNC_ENCRYPTION:
+       priv->vnc.encryption = g_value_get_flags (value);
+       break;
++    case PROP_RDP_AUTH_METHODS:
++      priv->rdp.auth_methods = g_value_get_flags (value);
++      break;
+     default:
+       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+     }
+@@ -782,4 +790,14 @@ grd_settings_class_init (GrdSettingsClass *klass)
+                                                        G_PARAM_READWRITE |
+                                                        G_PARAM_CONSTRUCT |
+                                                        G_PARAM_STATIC_STRINGS));
++  g_object_class_install_property (object_class,
++                                   PROP_RDP_AUTH_METHODS,
++                                   g_param_spec_flags ("rdp-auth-methods",
++                                                       "rdp auth methods",
++                                                       "rdp auth methods",
++                                                       GRD_TYPE_RDP_AUTH_METHODS,
++                                                       GRD_RDP_AUTH_METHOD_CREDENTIALS,
++                                                       G_PARAM_READWRITE |
++                                                       G_PARAM_CONSTRUCT |
++                                                       G_PARAM_STATIC_STRINGS));
+ }
+diff --git a/src/org.gnome.RemoteDesktop.xml b/src/org.gnome.RemoteDesktop.xml
+index a2e5a830..8bd23071 100644
+--- a/src/org.gnome.RemoteDesktop.xml
++++ b/src/org.gnome.RemoteDesktop.xml
+@@ -32,6 +32,7 @@
+     <property name="TlsCert" type="s" access="read" />
+     <property name="TlsFingerprint" type="s" access="read" />
+     <property name="TlsKey" type="s" access="read" />
++    <property name="AuthMethods" type="u" access="read" />
+     <property name="ViewOnly" type="b" access="read" />
+ 
+     <!--
+@@ -67,6 +68,7 @@
+     <property name="TlsCert" type="s" access="read" />
+     <property name="TlsFingerprint" type="s" access="read" />
+     <property name="TlsKey" type="s" access="read" />
++    <property name="AuthMethods" type="u" access="read" />
+ 
+     <method name="Enable" />
+ 
+diff --git a/src/org.gnome.desktop.remote-desktop.gschema.xml.in b/src/org.gnome.desktop.remote-desktop.gschema.xml.in
+index a0169789..a55f7ba1 100644
+--- a/src/org.gnome.desktop.remote-desktop.gschema.xml.in
++++ b/src/org.gnome.desktop.remote-desktop.gschema.xml.in
+@@ -76,6 +76,15 @@
+         devices (e.g. mouse and keyboard).
+       </description>
+     </key>
++    <key name='auth-methods' flags='org.gnome.desktop.remote-desktop.GrdRdpAuthMethods'>
++      <default>['credentials']</default>
++      <summary>Allowed authentication methods</summary>
++      <description>
++        Allowed authentication methods. Multiple may be selected to allow
++        different authentication mechanisms. At least one authentication method
++        must be selected.
++      </description>
++    </key>
+   </schema>
+   <schema id='org.gnome.desktop.remote-desktop.rdp.headless' path='/org/gnome/desktop/remote-desktop/rdp/headless/'>
+     <key name='port' type='q'>
+@@ -101,6 +110,15 @@
+         If set to 'true' the RDP backend will be initialized.
+       </description>
+     </key>
++    <key name='auth-methods' flags='org.gnome.desktop.remote-desktop.GrdRdpAuthMethods'>
++      <default>['credentials']</default>
++      <summary>Allowed authentication methods</summary>
++      <description>
++        Allowed authentication methods. Multiple may be selected to allow
++        different authentication mechanisms. At least one authentication method
++        must be selected.
++      </description>
++    </key>
+   </schema>
+   <schema id='org.gnome.desktop.remote-desktop.vnc' path='/org/gnome/desktop/remote-desktop/vnc/'>
+     <key name='port' type='q'>
+-- 
+2.54.0
+
+
+From 6dadab1bc5c6b8dfa03258e7f0d705a3adadc75a Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Fri, 23 Jan 2026 11:58:09 +0100
+Subject: [PATCH 02/22] Allow authenticating single user runtime modes using
+ Kerberos
+
+This commit allows either changing the credentials based authentication
+to using Kerberos, or using Kerberos in addition to the credentials
+based authentication when running gnome-remote-desktop as a screen
+sharing or single user RDP server.
+
+What the Kerberos authentication does is enforcing that the
+authenticated Kerberos principal maps to the same UID the server is
+currently running as.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/369>
+---
+ meson.build                                   |   1 +
+ src/grd-ctl.c                                 |  47 +++-
+ src/grd-daemon.c                              |  13 +
+ src/grd-enums.h                               |   1 +
+ src/grd-session-rdp.c                         | 223 +++++++++++++++++-
+ src/grd-settings-headless.c                   |   3 +
+ src/grd-settings-user.c                       |   3 +
+ src/grd-settings.c                            |  18 ++
+ src/meson.build                               |   1 +
+ src/org.gnome.RemoteDesktop.xml               |   2 +
+ ...nome.desktop.remote-desktop.gschema.xml.in |  18 ++
+ 11 files changed, 318 insertions(+), 12 deletions(-)
+
+diff --git a/meson.build b/meson.build
+index 3b02e287..b6d29b83 100644
+--- a/meson.build
++++ b/meson.build
+@@ -29,6 +29,7 @@ libei_dep = dependency('libei-1.0', version: libei_req)
+ libnotify_dep = dependency('libnotify')
+ libsecret_dep = dependency('libsecret-1')
+ libsystemd_dep = dependency('libsystemd', required: false)
++krb5_dep = dependency('krb5')
+ pipewire_dep = dependency('libpipewire-0.3', version: '>= 1.2.0')
+ systemd_dep = dependency('systemd', required: get_option('systemd'))
+ tss2_esys_dep = dependency('tss2-esys')
+diff --git a/src/grd-ctl.c b/src/grd-ctl.c
+index dc480592..8bb1697e 100644
+--- a/src/grd-ctl.c
++++ b/src/grd-ctl.c
+@@ -273,6 +273,10 @@ rdp_set_auth_methods (GrdSettings  *settings,
+         {
+           auth_methods |= GRD_RDP_AUTH_METHOD_CREDENTIALS;
+         }
++      else if (g_strcmp0 (*auth_method, "kerberos") == 0)
++        {
++          auth_methods |= GRD_RDP_AUTH_METHOD_KERBEROS;
++        }
+       else
+         {
+           g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+@@ -288,6 +292,14 @@ rdp_set_auth_methods (GrdSettings  *settings,
+       return FALSE;
+     }
+ 
++  if ((auth_methods & GRD_RDP_AUTH_METHOD_KERBEROS) &&
++      GRD_IS_SETTINGS_SYSTEM (settings))
++    {
++      g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
++                   "Kerberos not supported in the system daemon");
++      return FALSE;
++    }
++
+   g_object_set (G_OBJECT (settings), "rdp-auth-methods", auth_methods, NULL);
+   return TRUE;
+ }
+@@ -330,6 +342,32 @@ rdp_set_tls_key (GrdSettings  *settings,
+   return TRUE;
+ }
+ 
++static gboolean
++rdp_set_kerberos_keytab (GrdSettings  *settings,
++                         int           argc,
++                         char        **argv,
++                         GError      **error)
++{
++  char *path = argv[0];
++
++  if (GRD_IS_SETTINGS_SYSTEM (settings))
++    {
++      g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
++                   "Kerberos not supported in the system daemon");
++      return FALSE;
++    }
++
++  if (!g_path_is_absolute (path))
++    {
++      g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
++                   "Path to certificate file not absolute");
++      return FALSE;
++    }
++
++  g_object_set (G_OBJECT (settings), "rdp-kerberos-keytab", argv[0], NULL);
++  return TRUE;
++}
++
+ static gboolean
+ rdp_set_credentials (GrdSettings  *settings,
+                      int           argc,
+@@ -422,6 +460,7 @@ static const SubCommand rdp_subcommands[] = {
+   { "set-auth-methods", rdp_set_auth_methods, 1 },
+   { "set-tls-cert", rdp_set_tls_cert, 1 },
+   { "set-tls-key", rdp_set_tls_key, 1 },
++  { "set-kerberos-keytab", rdp_set_kerberos_keytab, 1 },
+   { "set-credentials", rdp_set_credentials, 0 },
+   { "set-credentials", rdp_set_credentials, 1 },
+   { "set-credentials", rdp_set_credentials, 2 },
+@@ -651,9 +690,10 @@ print_help (void)
+       "    disable                                      - Disable the RDP backend\n"
+       "    set-auth-methods <list-of-methods>           - Set a comma separated list of\n"
+       "                                                   allowed authentication methods\n"
+-      "                                                   (credentials)\n"
++      "                                                   (credentials, kerberos)\n"
+       "    set-tls-cert <path-to-cert>                  - Set path to TLS certificate\n"
+       "    set-tls-key <path-to-key>                    - Set path to TLS key\n"
++      "    set-kerberos-keytab <path-to-keytab>         - Set path to a Kerberos keytab\n"
+       "    set-credentials [<username> [<password>]]    - Set username and password\n"
+       "                                                   credentials\n"
+       "    clear-credentials                            - Clear username and password\n"
+@@ -769,6 +809,8 @@ generate_auth_methods_string (GrdRdpAuthMethods auth_methods)
+   builder = g_strv_builder_new ();
+   if (auth_methods & GRD_RDP_AUTH_METHOD_CREDENTIALS)
+     g_strv_builder_add (builder, "credentials");
++  if (auth_methods & GRD_RDP_AUTH_METHOD_KERBEROS)
++    g_strv_builder_add (builder, "kerberos");
+ 
+   auth_method_strings = g_strv_builder_end (builder);
+ 
+@@ -785,6 +827,7 @@ print_rdp_status (GrdSettings *settings,
+   g_autofree char *tls_fingerprint = NULL;
+   g_autofree char *tls_cert = NULL;
+   g_autofree char *tls_key = NULL;
++  g_autofree char *kerberos_keytab = NULL;
+   g_autofree char *username = NULL;
+   g_autofree char *password = NULL;
+   g_autoptr (GError) error = NULL;
+@@ -798,6 +841,7 @@ print_rdp_status (GrdSettings *settings,
+                 "rdp-server-fingerprint", &tls_fingerprint,
+                 "rdp-server-cert-path", &tls_cert,
+                 "rdp-server-key-path", &tls_key,
++                "rdp-kerberos-keytab", &kerberos_keytab,
+                 "rdp-negotiate-port", &negotiate_port,
+                 "rdp-view-only", &view_only,
+                 "rdp-enabled", &enabled,
+@@ -813,6 +857,7 @@ print_rdp_status (GrdSettings *settings,
+   printf ("\tTLS certificate: %s\n", tls_cert);
+   printf ("\tTLS fingerprint: %s\n", tls_fingerprint);
+   printf ("\tTLS key: %s\n", tls_key);
++  printf ("\tKerberos keytab: %s\n", kerberos_keytab);
+   if (!GRD_IS_SETTINGS_SYSTEM (settings) && !GRD_IS_SETTINGS_HEADLESS (settings))
+      printf ("\tView-only: %s\n", view_only ? "yes" : "no");
+   if (!GRD_IS_SETTINGS_SYSTEM (settings))
+diff --git a/src/grd-daemon.c b/src/grd-daemon.c
+index ebb9d685..ac6e6bfc 100644
+--- a/src/grd-daemon.c
++++ b/src/grd-daemon.c
+@@ -222,6 +222,9 @@ export_rdp_server_interface (GrdDaemon *daemon)
+   g_object_bind_property (settings, "rdp-auth-methods",
+                           rdp_server_interface, "auth-methods",
+                           G_BINDING_SYNC_CREATE);
++  g_object_bind_property (settings, "rdp-kerberos-keytab",
++                          rdp_server_interface, "kerberos-keytab",
++                          G_BINDING_SYNC_CREATE);
+   g_object_bind_property (settings, "rdp-view-only",
+                           rdp_server_interface, "view-only",
+                           G_BINDING_SYNC_CREATE);
+@@ -274,6 +277,10 @@ start_rdp_server_when_ready (GrdDaemon *daemon,
+                            "notify::rdp-auth-methods",
+                            G_CALLBACK (maybe_start_rdp_server),
+                            daemon, G_CONNECT_SWAPPED);
++  g_signal_connect_object (G_OBJECT (settings),
++                           "notify::rdp-kerberos-keytab",
++                           G_CALLBACK (maybe_start_rdp_server),
++                           daemon, G_CONNECT_SWAPPED);
+ }
+ 
+ static void
+@@ -431,6 +438,7 @@ maybe_start_rdp_server (GrdDaemon *daemon)
+   GrdSettings *settings = grd_context_get_settings (priv->context);
+   g_autoptr (GError) error = NULL;
+   GrdRdpAuthMethods auth_methods = 0;
++  g_autofree char *kerberos_keytab = NULL;
+   g_autofree char *certificate = NULL;
+   g_autofree char *key = NULL;
+   gboolean rdp_enabled = FALSE;
+@@ -444,6 +452,7 @@ maybe_start_rdp_server (GrdDaemon *daemon)
+   g_object_get (G_OBJECT (settings),
+                 "rdp-enabled", &rdp_enabled,
+                 "rdp-auth-methods", &auth_methods,
++                "rdp-kerberos-keytab", &kerberos_keytab,
+                 "rdp-server-cert", &certificate,
+                 "rdp-server-key", &key,
+                 NULL);
+@@ -457,6 +466,10 @@ maybe_start_rdp_server (GrdDaemon *daemon)
+       return;
+     }
+ 
++  if (auth_methods & GRD_RDP_AUTH_METHOD_KERBEROS &&
++      !kerberos_keytab)
++    return;
++
+   if ((certificate && key) ||
+       grd_context_get_runtime_mode (priv->context) == GRD_RUNTIME_MODE_HANDOVER)
+     {
+diff --git a/src/grd-enums.h b/src/grd-enums.h
+index dcc80565..b5793483 100644
+--- a/src/grd-enums.h
++++ b/src/grd-enums.h
+@@ -55,4 +55,5 @@ typedef enum
+ typedef enum
+ {
+   GRD_RDP_AUTH_METHOD_CREDENTIALS = 1 << 0,
++  GRD_RDP_AUTH_METHOD_KERBEROS = 1 << 1,
+ } GrdRdpAuthMethods;
+diff --git a/src/grd-session-rdp.c b/src/grd-session-rdp.c
+index 9f2f15a9..bffa9b05 100644
+--- a/src/grd-session-rdp.c
++++ b/src/grd-session-rdp.c
+@@ -27,7 +27,10 @@
+ #include <freerdp/freerdp.h>
+ #include <freerdp/peer.h>
+ #include <gio/gio.h>
++#include <glib-unix.h>
++#include <krb5.h>
+ #include <linux/input-event-codes.h>
++#include <pwd.h>
+ #include <xkbcommon/xkbcommon.h>
+ 
+ #include "grd-clipboard-rdp.h"
+@@ -895,6 +898,175 @@ rdp_autodetect_on_connect_time_autodetect_begin (rdpAutoDetect *rdp_autodetect)
+   return FREERDP_AUTODETECT_STATE_REQUEST;
+ }
+ 
++static GrdRdpAuthMethods
++get_effective_auth_method (rdpContext *rdp_context)
++{
++  GrdRdpAuthMethods auth_method = -1;
++  SECURITY_STATUS status;
++  SecPkgContext_PackageInfo package_info = {};
++
++  status = freerdp_nla_QueryContextAttributes (rdp_context,
++                                               SECPKG_ATTR_PACKAGE_INFO,
++                                               &package_info);
++  if (status != SEC_E_OK)
++    {
++      g_warning ("Failed to query NLA context package info: %s",
++                 GetSecurityStatusString (status));
++      return FALSE;
++    }
++
++  if (g_strcmp0 (package_info.PackageInfo->Name, KERBEROS_SSP_NAME) == 0)
++    auth_method = GRD_RDP_AUTH_METHOD_KERBEROS;
++  else if (g_strcmp0 (package_info.PackageInfo->Name, NTLM_SSP_NAME) == 0)
++    auth_method = GRD_RDP_AUTH_METHOD_CREDENTIALS;
++  else
++    g_warning ("Unknown NLA context package '%s'", package_info.PackageInfo->Name);
++
++  freerdp_nla_FreeContextBuffer (rdp_context, package_info.PackageInfo);
++  return auth_method;
++}
++
++static gboolean
++is_auth_identity_current_user (const SecPkgContext_AuthIdentity *auth_identity)
++{
++  krb5_error_code kret;
++  g_autofree char *principal_string = NULL;
++  krb5_context krb5_context = NULL;
++  krb5_principal principal = NULL;
++  char local_name[256 + 1];
++  g_autofree struct passwd *pwd = NULL;
++  g_autoptr (GError) error = NULL;
++  uid_t current_uid;
++
++  kret = krb5_init_context (&krb5_context);
++  if (kret)
++    {
++      g_critical ("Failed to initialize krb5 context");
++      return FALSE;
++    }
++
++  principal_string = g_strdup_printf ("%s@%s",
++                                      auth_identity->User,
++                                      auth_identity->Domain);
++
++  kret = krb5_parse_name (krb5_context, principal_string, &principal);
++  if (kret)
++    {
++      g_critical ("Failed to parse principal string %s", principal_string);
++      goto err;
++    }
++
++  kret = krb5_aname_to_localname (krb5_context, principal,
++                                  sizeof (local_name), local_name);
++  if (kret)
++    {
++      g_critical ("Failed to map principal '%s' name to local name",
++                  principal_string);
++      return FALSE;
++      goto err;
++    }
++
++  pwd = g_unix_get_passwd_entry (local_name, &error);
++  if (error)
++    {
++      g_critical ("Failed to get passwd field for %s: %s",
++                  local_name, error->message);
++      goto err;
++    }
++
++  if (!pwd)
++    {
++      g_warning ("Tried to authenticate with invalid user %s", local_name);
++      goto err;
++    }
++
++  krb5_free_principal (krb5_context, principal);
++  krb5_free_context (krb5_context);
++
++  current_uid = getuid ();
++  if (pwd->pw_uid == current_uid)
++    {
++      g_debug ("[RDP] Kerberos principal %s match current user %s (%u), "
++               "accepting.",
++               principal_string,
++               local_name,
++               current_uid);
++      return TRUE;
++    }
++  else
++    {
++      return FALSE;
++    }
++
++err:
++  if (principal)
++    krb5_free_principal (krb5_context, principal);
++  if (krb5_context)
++    krb5_free_context (krb5_context);
++  return FALSE;
++}
++
++static BOOL
++rdp_peer_logon (freerdp_peer                  *peer,
++                const SEC_WINNT_AUTH_IDENTITY *identity,
++                BOOL                           automatic)
++{
++  rdpContext *rdp_context = peer->context;
++  RdpPeerContext *rdp_peer_context = (RdpPeerContext *) rdp_context;
++  GrdSessionRdp *session_rdp = rdp_peer_context->session_rdp;
++  GrdContext *context = grd_session_get_context (GRD_SESSION (session_rdp));
++  GrdRdpAuthMethods auth_method;
++  SECURITY_STATUS status;
++  SecPkgContext_AuthIdentity auth_identity = {};
++
++  auth_method = get_effective_auth_method (rdp_context);
++
++  if (auth_method == -1)
++    return FALSE;
++
++  switch (auth_method)
++    {
++    case GRD_RDP_AUTH_METHOD_CREDENTIALS:
++      g_debug ("[RDP] Authenticated using NTLM, "
++               "not applying any additional policy.");
++      return TRUE;
++    case GRD_RDP_AUTH_METHOD_KERBEROS:
++      break;
++    }
++
++  status = freerdp_nla_QueryContextAttributes (rdp_context,
++                                               SECPKG_ATTR_AUTH_IDENTITY,
++                                               &auth_identity);
++
++  if (status != SEC_E_OK)
++    {
++      g_warning ("Failed to authenticate Kerberos principal: %s",
++                 GetSecurityStatusString (status));
++      return FALSE;
++    }
++
++  switch (grd_context_get_runtime_mode (context))
++    {
++    case GRD_RUNTIME_MODE_HEADLESS:
++    case GRD_RUNTIME_MODE_SCREEN_SHARE:
++      if (is_auth_identity_current_user (&auth_identity))
++        {
++          return TRUE;
++        }
++      else
++        {
++          g_debug ("[RDP] Kerberos principal doesn't match current user, "
++                   "disconnecting");
++          return FALSE;
++        }
++    case GRD_RUNTIME_MODE_SYSTEM:
++    case GRD_RUNTIME_MODE_HANDOVER:
++      g_assert_not_reached ();
++    }
++
++  g_assert_not_reached ();
++}
++
+ static uint32_t
+ get_max_monitor_count (GrdSessionRdp *session_rdp)
+ {
+@@ -1196,6 +1368,7 @@ init_rdp_session (GrdSessionRdp  *session_rdp,
+   GrdContext *context = grd_session_get_context (GRD_SESSION (session_rdp));
+   GrdSettings *settings = grd_context_get_settings (context);
+   GSocket *socket = g_socket_connection_get_socket (session_rdp->connection);
++  GrdRdpAuthMethods auth_methods = 0;
+   g_autofree char *server_cert = NULL;
+   g_autofree char *server_key = NULL;
+   gboolean use_client_configs;
+@@ -1223,6 +1396,7 @@ init_rdp_session (GrdSessionRdp  *session_rdp,
+   peer->ContextSize = sizeof (RdpPeerContext);
+   peer->ContextFree = (psPeerContextFree) rdp_peer_context_free;
+   peer->ContextNew = (psPeerContextNew) rdp_peer_context_new;
++
+   if (!freerdp_peer_context_new (peer))
+     {
+       g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+@@ -1235,21 +1409,47 @@ init_rdp_session (GrdSessionRdp  *session_rdp,
+   rdp_peer_context = (RdpPeerContext *) peer->context;
+   rdp_peer_context->session_rdp = session_rdp;
+ 
+-  session_rdp->sam_file = grd_rdp_sam_create_sam_file (username, password);
+-  if (!session_rdp->sam_file)
++  rdp_settings = peer->context->settings;
++  g_object_get (G_OBJECT (settings),
++                "rdp-auth-methods", &auth_methods,
++                NULL);
++  g_assert (auth_methods);
++
++  if (auth_methods & GRD_RDP_AUTH_METHOD_CREDENTIALS)
+     {
+-      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+-                   "Failed to create SAM database");
+-      return FALSE;
++      session_rdp->sam_file = grd_rdp_sam_create_sam_file (username, password);
++      if (!session_rdp->sam_file)
++        {
++          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
++                       "Failed to create SAM database");
++          return FALSE;
++        }
++      if (!freerdp_settings_set_string (rdp_settings, FreeRDP_NtlmSamFile,
++                                        session_rdp->sam_file->filename))
++        {
++          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
++                       "Failed to set path of SAM database");
++          return FALSE;
++        }
+     }
+ 
+-  rdp_settings = peer->context->settings;
+-  if (!freerdp_settings_set_string (rdp_settings, FreeRDP_NtlmSamFile,
+-                                    session_rdp->sam_file->filename))
++  if (auth_methods & GRD_RDP_AUTH_METHOD_KERBEROS)
+     {
+-      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+-                   "Failed to set path of SAM database");
+-      return FALSE;
++      g_autofree char *kerberos_keytab = NULL;
++
++      g_object_get (G_OBJECT (settings),
++                    "rdp-kerberos-keytab", &kerberos_keytab,
++                    NULL);
++
++      g_debug ("[RDP] Enabling Kerberos authentication using %s", kerberos_keytab);
++
++      if (!freerdp_settings_set_string (rdp_settings, FreeRDP_KerberosKeytab,
++                                        kerberos_keytab))
++        {
++          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
++                       "Failed to set Kerberos keytab");
++          return FALSE;
++        }
+     }
+ 
+   g_object_get (G_OBJECT (settings),
+@@ -1335,6 +1535,7 @@ init_rdp_session (GrdSessionRdp  *session_rdp,
+   freerdp_settings_set_bool (rdp_settings, FreeRDP_AudioPlayback, TRUE);
+   freerdp_settings_set_bool (rdp_settings, FreeRDP_RemoteConsoleAudio, TRUE);
+ 
++  peer->Logon =  rdp_peer_logon;
+   peer->Capabilities = rdp_peer_capabilities;
+   peer->PostConnect = rdp_peer_post_connect;
+   peer->Activate = rdp_peer_activate;
+diff --git a/src/grd-settings-headless.c b/src/grd-settings-headless.c
+index d1191e78..50e641e7 100644
+--- a/src/grd-settings-headless.c
++++ b/src/grd-settings-headless.c
+@@ -71,6 +71,9 @@ grd_settings_headless_constructed (GObject *object)
+   g_settings_bind (settings->rdp_settings, "auth-methods",
+                    settings, "rdp-auth-methods",
+                    G_SETTINGS_BIND_DEFAULT);
++  g_settings_bind (settings->rdp_settings, "kerberos-keytab",
++                   settings, "rdp-kerberos-keytab",
++                   G_SETTINGS_BIND_DEFAULT);
+   g_settings_bind (settings->common_rdp_settings, "tls-cert",
+                    settings, "rdp-server-cert-path",
+                    G_SETTINGS_BIND_DEFAULT);
+diff --git a/src/grd-settings-user.c b/src/grd-settings-user.c
+index 172ac5c6..e0e5d075 100644
+--- a/src/grd-settings-user.c
++++ b/src/grd-settings-user.c
+@@ -76,6 +76,9 @@ grd_settings_user_constructed (GObject *object)
+   g_settings_bind (settings->rdp_settings, "auth-methods",
+                    settings, "rdp-auth-methods",
+                    G_SETTINGS_BIND_DEFAULT);
++  g_settings_bind (settings->rdp_settings, "kerberos-keytab",
++                   settings, "rdp-kerberos-keytab",
++                   G_SETTINGS_BIND_DEFAULT);
+   g_settings_bind (settings->vnc_settings, "enable",
+                    settings, "vnc-enabled",
+                    G_SETTINGS_BIND_DEFAULT);
+diff --git a/src/grd-settings.c b/src/grd-settings.c
+index dbc1cade..2215e69a 100644
+--- a/src/grd-settings.c
++++ b/src/grd-settings.c
+@@ -61,6 +61,7 @@ enum
+   PROP_VNC_AUTH_METHOD,
+   PROP_VNC_ENCRYPTION,
+   PROP_RDP_AUTH_METHODS,
++  PROP_RDP_KERBEROS_KEYTAB,
+ };
+ 
+ typedef struct _GrdSettingsPrivate
+@@ -80,6 +81,7 @@ typedef struct _GrdSettingsPrivate
+     char *server_key;
+     char *server_cert_path;
+     char *server_key_path;
++    char *kerberos_keytab;
+   } rdp;
+   struct {
+     int port;
+@@ -456,6 +458,9 @@ grd_settings_get_property (GObject    *object,
+     case PROP_RDP_AUTH_METHODS:
+       g_value_set_flags (value, priv->rdp.auth_methods);
+       break;
++    case PROP_RDP_KERBEROS_KEYTAB:
++      g_value_set_string (value, priv->rdp.kerberos_keytab);
++      break;
+     default:
+       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+     }
+@@ -599,6 +604,10 @@ grd_settings_set_property (GObject      *object,
+     case PROP_RDP_AUTH_METHODS:
+       priv->rdp.auth_methods = g_value_get_flags (value);
+       break;
++    case PROP_RDP_KERBEROS_KEYTAB:
++      g_clear_pointer (&priv->rdp.kerberos_keytab, g_free);
++      priv->rdp.kerberos_keytab = g_value_dup_string (value);
++      break;
+     default:
+       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+     }
+@@ -800,4 +809,13 @@ grd_settings_class_init (GrdSettingsClass *klass)
+                                                        G_PARAM_READWRITE |
+                                                        G_PARAM_CONSTRUCT |
+                                                        G_PARAM_STATIC_STRINGS));
++  g_object_class_install_property (object_class,
++                                   PROP_RDP_KERBEROS_KEYTAB,
++                                   g_param_spec_string ("rdp-kerberos-keytab",
++                                                        "rdp kerberos keypath",
++                                                        "rdp kerberos keypath",
++                                                        NULL,
++                                                        G_PARAM_READWRITE |
++                                                        G_PARAM_CONSTRUCT |
++                                                        G_PARAM_STATIC_STRINGS));
+ }
+diff --git a/src/meson.build b/src/meson.build
+index 64e49c51..245aceb4 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -16,6 +16,7 @@ deps = [
+   pipewire_dep,
+   libei_dep,
+   libnotify_dep,
++  krb5_dep,
+   epoxy_dep,
+   drm_dep,
+   xkbcommon_dep,
+diff --git a/src/org.gnome.RemoteDesktop.xml b/src/org.gnome.RemoteDesktop.xml
+index 8bd23071..d42bf937 100644
+--- a/src/org.gnome.RemoteDesktop.xml
++++ b/src/org.gnome.RemoteDesktop.xml
+@@ -33,6 +33,7 @@
+     <property name="TlsFingerprint" type="s" access="read" />
+     <property name="TlsKey" type="s" access="read" />
+     <property name="AuthMethods" type="u" access="read" />
++    <property name="KerberosKeytab" type="s" access="read" />
+     <property name="ViewOnly" type="b" access="read" />
+ 
+     <!--
+@@ -69,6 +70,7 @@
+     <property name="TlsFingerprint" type="s" access="read" />
+     <property name="TlsKey" type="s" access="read" />
+     <property name="AuthMethods" type="u" access="read" />
++    <property name="KerberosKeytab" type="s" access="read" />
+ 
+     <method name="Enable" />
+ 
+diff --git a/src/org.gnome.desktop.remote-desktop.gschema.xml.in b/src/org.gnome.desktop.remote-desktop.gschema.xml.in
+index a55f7ba1..16945568 100644
+--- a/src/org.gnome.desktop.remote-desktop.gschema.xml.in
++++ b/src/org.gnome.desktop.remote-desktop.gschema.xml.in
+@@ -85,6 +85,15 @@
+         must be selected.
+       </description>
+     </key>
++    <key name='kerberos-keytab' type='s'>
++      <default>''</default>
++      <summary>A path to a Kerberos keytab file</summary>
++      <description>
++        When 'kerberos' is enabled as an authentication method, the TERMSRV
++        Kerberos service principal in this keytab file will be used for
++        authentication.
++      </description>
++    </key>
+   </schema>
+   <schema id='org.gnome.desktop.remote-desktop.rdp.headless' path='/org/gnome/desktop/remote-desktop/rdp/headless/'>
+     <key name='port' type='q'>
+@@ -119,6 +128,15 @@
+         must be selected.
+       </description>
+     </key>
++    <key name='kerberos-keytab' type='s'>
++      <default>''</default>
++      <summary>A path to a Kerberos keytab file</summary>
++      <description>
++        When 'kerberos' is enabled as an authentication method, the TERMSRV
++        Kerberos service principal in this keytab file will be used for
++        authentication.
++      </description>
++    </key>
+   </schema>
+   <schema id='org.gnome.desktop.remote-desktop.vnc' path='/org/gnome/desktop/remote-desktop/vnc/'>
+     <key name='port' type='q'>
+-- 
+2.54.0
+
+
+From 4db8ec36abc5f0fb01d5bbfe60e027bb053b97f5 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Fri, 30 Jan 2026 15:26:32 +0100
+Subject: [PATCH 03/22] session/rdp: Don't error check freerdp_settings_set*()
+
+They only ever fail due to memory allocation failure, but since we
+depend on being able to over commit, these errors will never happen.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/369>
+---
+ src/grd-session-rdp.c | 32 ++++++++++----------------------
+ 1 file changed, 10 insertions(+), 22 deletions(-)
+
+diff --git a/src/grd-session-rdp.c b/src/grd-session-rdp.c
+index bffa9b05..37bc4dab 100644
+--- a/src/grd-session-rdp.c
++++ b/src/grd-session-rdp.c
+@@ -1424,13 +1424,8 @@ init_rdp_session (GrdSessionRdp  *session_rdp,
+                        "Failed to create SAM database");
+           return FALSE;
+         }
+-      if (!freerdp_settings_set_string (rdp_settings, FreeRDP_NtlmSamFile,
+-                                        session_rdp->sam_file->filename))
+-        {
+-          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+-                       "Failed to set path of SAM database");
+-          return FALSE;
+-        }
++      freerdp_settings_set_string (rdp_settings, FreeRDP_NtlmSamFile,
++                                   session_rdp->sam_file->filename);
+     }
+ 
+   if (auth_methods & GRD_RDP_AUTH_METHOD_KERBEROS)
+@@ -1443,13 +1438,8 @@ init_rdp_session (GrdSessionRdp  *session_rdp,
+ 
+       g_debug ("[RDP] Enabling Kerberos authentication using %s", kerberos_keytab);
+ 
+-      if (!freerdp_settings_set_string (rdp_settings, FreeRDP_KerberosKeytab,
+-                                        kerberos_keytab))
+-        {
+-          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+-                       "Failed to set Kerberos keytab");
+-          return FALSE;
+-        }
++      freerdp_settings_set_string (rdp_settings, FreeRDP_KerberosKeytab,
++                                   kerberos_keytab);
+     }
+ 
+   g_object_get (G_OBJECT (settings),
+@@ -1465,10 +1455,9 @@ init_rdp_session (GrdSessionRdp  *session_rdp,
+                    "Failed to create certificate from file");
+       return FALSE;
+     }
+-  if (!freerdp_settings_set_pointer_len (rdp_settings,
+-                                         FreeRDP_RdpServerCertificate,
+-                                         rdp_certificate, 1))
+-    g_assert_not_reached ();
++  freerdp_settings_set_pointer_len (rdp_settings,
++                                    FreeRDP_RdpServerCertificate,
++                                    rdp_certificate, 1);
+ 
+   if (server_key)
+     rdp_private_key = freerdp_key_new_from_pem (server_key);
+@@ -1478,10 +1467,9 @@ init_rdp_session (GrdSessionRdp  *session_rdp,
+                    "Failed to create private key from file");
+       return FALSE;
+     }
+-  if (!freerdp_settings_set_pointer_len (rdp_settings,
+-                                         FreeRDP_RdpServerRsaKey,
+-                                         rdp_private_key, 1))
+-    g_assert_not_reached ();
++  freerdp_settings_set_pointer_len (rdp_settings,
++                                    FreeRDP_RdpServerRsaKey,
++                                    rdp_private_key, 1);
+ 
+   freerdp_settings_set_bool (rdp_settings, FreeRDP_RdpSecurity, FALSE);
+   freerdp_settings_set_bool (rdp_settings, FreeRDP_TlsSecurity, FALSE);
+-- 
+2.54.0
+
+
+From 28371245fe36268e76aa90516838457a6cbaad66 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Sat, 31 Jan 2026 10:32:44 +0100
+Subject: [PATCH 04/22] daemon: Add some debug logging when maybe starting RDP
+ server
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/369>
+---
+ src/grd-daemon.c | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/src/grd-daemon.c b/src/grd-daemon.c
+index ac6e6bfc..50bcd3d2 100644
+--- a/src/grd-daemon.c
++++ b/src/grd-daemon.c
+@@ -447,7 +447,10 @@ maybe_start_rdp_server (GrdDaemon *daemon)
+     return;
+ 
+   if (!GRD_DAEMON_GET_CLASS (daemon)->is_daemon_ready (daemon))
+-    return;
++    {
++      g_debug ("Daemon not ready, not starting RDP server");
++      return;
++    }
+ 
+   g_object_get (G_OBJECT (settings),
+                 "rdp-enabled", &rdp_enabled,
+@@ -458,7 +461,10 @@ maybe_start_rdp_server (GrdDaemon *daemon)
+                 NULL);
+ 
+   if (!rdp_enabled)
+-    return;
++    {
++      g_debug ("RDP not enabled, not starting RDP server");
++      return;
++    }
+ 
+   if (!auth_methods)
+     {
+@@ -468,7 +474,10 @@ maybe_start_rdp_server (GrdDaemon *daemon)
+ 
+   if (auth_methods & GRD_RDP_AUTH_METHOD_KERBEROS &&
+       !kerberos_keytab)
+-    return;
++    {
++      g_debug ("Kerberos keytab not set, not starting RDP server");
++      return;
++    }
+ 
+   if ((certificate && key) ||
+       grd_context_get_runtime_mode (priv->context) == GRD_RUNTIME_MODE_HANDOVER)
+-- 
+2.54.0
+
+
+From a6b9a643c75cd23ec5c94550cb59c7418bb2e3fa Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Fri, 6 Feb 2026 10:30:13 +0100
+Subject: [PATCH 05/22] man/grdctl: Add sections about auth methods and
+ kerberos
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/376>
+---
+ man/grdctl.txt | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/man/grdctl.txt b/man/grdctl.txt
+index 4f359bf4..e86cd4bc 100644
+--- a/man/grdctl.txt
++++ b/man/grdctl.txt
+@@ -37,12 +37,21 @@ Enable the RDP backend.
+ *rdp* *disable*::
+ Disable the RDP backend.
+ 
++*rdp* *set-auth-methods* 'AUTH-METHOD...'::
++Set a comma separated list of authentication methods. Available methods are
++'credentials' and 'kerberos'. The 'kerberos' method is only supported by the
++headless and screen share runtime modes. At least one auth method must be set.
++
+ *rdp* *set-tls-cert* 'TLS-CERT'::
+ Set path to TLS certificate.
+ 
+ *rdp* *set-tls-key* 'TLS-KEY'::
+ Set path to TLS key.
+ 
++*rdp* *set-kerberos-keytab* 'KERBEROS-KEY-TAB'::
++Set the path to a Kerberos keytab. When configured with the 'kerberos' auth
++method, this keytab will be used for authenticating remote users.
++
+ *rdp* *set-credentials* 'USERNAME' 'PASSWORD'::
+ Set username and password credentials.
+ 
+-- 
+2.54.0
+
+
+From d47b77c102eb231f34ce30d855eb7dbfda082fff Mon Sep 17 00:00:00 2001
+From: Pascal Nowack <Pascal.Nowack@gmx.de>
+Date: Wed, 4 Feb 2026 07:54:07 +0100
+Subject: [PATCH 06/22] session-rdp: Don't check for authentication methods on
+ daemon-handover
+
+When authenticating against the handover deamon, RDSTLS may be used
+instead of NLA. In such case, gnome-remote-desktop crashes when
+attempting to get the SecPkgContext_PackageInfo. So avoid doing that
+when using the handover daemon.
+Also, Kerberos integration is currently only done for the single user
+cases, i.e. when not using the system and handover daemon. So, do not
+set the keytab too when using those daemons.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/374>
+---
+ src/grd-session-rdp.c | 24 +++++++++++++++++++++++-
+ 1 file changed, 23 insertions(+), 1 deletion(-)
+
+diff --git a/src/grd-session-rdp.c b/src/grd-session-rdp.c
+index 37bc4dab..529fff2d 100644
+--- a/src/grd-session-rdp.c
++++ b/src/grd-session-rdp.c
+@@ -898,6 +898,24 @@ rdp_autodetect_on_connect_time_autodetect_begin (rdpAutoDetect *rdp_autodetect)
+   return FREERDP_AUTODETECT_STATE_REQUEST;
+ }
+ 
++static gboolean
++is_using_remote_login (GrdSessionRdp *session_rdp)
++{
++  GrdContext *context = grd_session_get_context (GRD_SESSION (session_rdp));
++
++  switch (grd_context_get_runtime_mode (context))
++    {
++    case GRD_RUNTIME_MODE_SCREEN_SHARE:
++    case GRD_RUNTIME_MODE_HEADLESS:
++      return FALSE;
++    case GRD_RUNTIME_MODE_SYSTEM:
++    case GRD_RUNTIME_MODE_HANDOVER:
++      return TRUE;
++    }
++
++  g_assert_not_reached ();
++}
++
+ static GrdRdpAuthMethods
+ get_effective_auth_method (rdpContext *rdp_context)
+ {
+@@ -1019,6 +1037,9 @@ rdp_peer_logon (freerdp_peer                  *peer,
+   SECURITY_STATUS status;
+   SecPkgContext_AuthIdentity auth_identity = {};
+ 
++  if (is_using_remote_login (session_rdp))
++    return TRUE;
++
+   auth_method = get_effective_auth_method (rdp_context);
+ 
+   if (auth_method == -1)
+@@ -1428,7 +1449,8 @@ init_rdp_session (GrdSessionRdp  *session_rdp,
+                                    session_rdp->sam_file->filename);
+     }
+ 
+-  if (auth_methods & GRD_RDP_AUTH_METHOD_KERBEROS)
++  if (auth_methods & GRD_RDP_AUTH_METHOD_KERBEROS &&
++      !is_using_remote_login (session_rdp))
+     {
+       g_autofree char *kerberos_keytab = NULL;
+ 
+-- 
+2.54.0
+
+
+From 47edae8d4bffa2593f21bc38c6179a1a51548b9d Mon Sep 17 00:00:00 2001
+From: Joan Torres Lopez <joantolo@redhat.com>
+Date: Fri, 14 Nov 2025 15:39:52 +0100
+Subject: [PATCH 07/22] session-rdp: Add getter for socket connection
+
+Add grd_session_rdp_get_socket_connection() to expose the socket
+connection from the session. This will be used in the next commit
+to store the connection IP address in the remote client.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/355>
+---
+ src/grd-session-rdp.c | 6 ++++++
+ src/grd-session-rdp.h | 2 ++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/src/grd-session-rdp.c b/src/grd-session-rdp.c
+index 529fff2d..99f8f5a9 100644
+--- a/src/grd-session-rdp.c
++++ b/src/grd-session-rdp.c
+@@ -137,6 +137,12 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (rdpRedirection, redirection_free)
+ static gboolean
+ close_session_idle (gpointer user_data);
+ 
++GSocketConnection *
++grd_session_rdp_get_socket_connection (GrdSessionRdp *session_rdp)
++{
++  return session_rdp->connection;
++}
++
+ static gboolean
+ is_rdp_peer_flag_set (GrdSessionRdp *session_rdp,
+                       RdpPeerFlag    flag)
+diff --git a/src/grd-session-rdp.h b/src/grd-session-rdp.h
+index a6358e65..8b05a955 100644
+--- a/src/grd-session-rdp.h
++++ b/src/grd-session-rdp.h
+@@ -80,3 +80,5 @@ gboolean grd_session_rdp_send_server_redirection (GrdSessionRdp *session_rdp,
+                                                   const char    *username,
+                                                   const char    *password,
+                                                   const char    *certificate);
++
++GSocketConnection *grd_session_rdp_get_socket_connection (GrdSessionRdp *session_rdp);
+-- 
+2.54.0
+
+
+From eebd54722abe4b62fe2e971f0d9b70dff024a285 Mon Sep 17 00:00:00 2001
+From: Joan Torres Lopez <joantolo@redhat.com>
+Date: Fri, 14 Nov 2025 15:45:17 +0100
+Subject: [PATCH 08/22] daemon-system: Store IP address in remote client
+
+Add a hostname field to the GrdRemoteClient struct to store the
+remote client's IP address.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/355>
+---
+ src/grd-daemon-system.c | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/src/grd-daemon-system.c b/src/grd-daemon-system.c
+index 58991772..e7108b39 100644
+--- a/src/grd-daemon-system.c
++++ b/src/grd-daemon-system.c
+@@ -52,6 +52,7 @@ typedef struct
+   GrdDaemonSystem *daemon_system;
+ 
+   char *id;
++  char *hostname;
+ 
+   GrdSession *session;
+   GSocketConnection *socket_connection;
+@@ -526,6 +527,7 @@ grd_remote_client_free (GrdRemoteClient *remote_client)
+   disconnect_from_remote_display (remote_client);
+ 
+   g_clear_pointer (&remote_client->id, g_free);
++  g_clear_pointer (&remote_client->hostname, g_free);
+   g_clear_object (&remote_client->socket_connection);
+   unregister_handover_iface (remote_client, remote_client->handover_src);
+   unregister_handover_iface (remote_client, remote_client->handover_dst);
+@@ -563,6 +565,26 @@ session_disposed (GrdRemoteClient *remote_client)
+   remote_client->session = NULL;
+ }
+ 
++static char *
++try_get_hostname (GrdSessionRdp *session_rdp)
++{
++  g_autoptr (GSocketAddress) socket_address = NULL;
++  GSocketConnection *connection;
++  GInetAddress *inet_address;
++
++  connection = grd_session_rdp_get_socket_connection (session_rdp);
++  if (!connection)
++    return NULL;
++
++  socket_address = g_socket_connection_get_remote_address (connection, NULL);
++  if (!socket_address || !G_IS_INET_SOCKET_ADDRESS (socket_address))
++    return NULL;
++
++  inet_address = g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (socket_address));
++
++  return g_inet_address_to_string (inet_address);
++}
++
+ static GrdRemoteClient *
+ remote_client_new (GrdDaemonSystem *daemon_system,
+                    GrdSession      *session)
+@@ -577,6 +599,7 @@ remote_client_new (GrdDaemonSystem *daemon_system,
+   if (!session)
+     return remote_client;
+ 
++  remote_client->hostname = try_get_hostname (GRD_SESSION_RDP (session));
+   remote_client->is_client_mstsc = grd_session_rdp_is_client_mstsc (GRD_SESSION_RDP (session));
+   remote_client->session = session;
+   g_object_weak_ref (G_OBJECT (session),
+-- 
+2.54.0
+
+
+From bc4dfd5f1d549629b3ce76fe0b9973013897e76d Mon Sep 17 00:00:00 2001
+From: Joan Torres Lopez <joantolo@redhat.com>
+Date: Fri, 14 Nov 2025 15:47:30 +0100
+Subject: [PATCH 09/22] daemon-system: Use properties dictionary for
+ CreateRemoteDisplay
+
+Update the DBus interface to accept a properties dictionary (a{sv})
+instead of an explicit remote_id parameter.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/355>
+---
+ src/grd-daemon-system.c          | 16 +++++++++++++++-
+ src/org.gnome.DisplayManager.xml |  2 +-
+ 2 files changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/src/grd-daemon-system.c b/src/grd-daemon-system.c
+index e7108b39..5c909de0 100644
+--- a/src/grd-daemon-system.c
++++ b/src/grd-daemon-system.c
+@@ -685,6 +685,18 @@ on_incoming_redirected_connection (GrdRdpServer      *rdp_server,
+     remote_client->use_system_credentials);
+ }
+ 
++static GVariant *
++serialize_remote_display_properties (GrdRemoteClient *remote_client)
++{
++  GVariantBuilder builder;
++
++  g_variant_builder_init (&builder, G_VARIANT_TYPE ("a{sv}"));
++  g_variant_builder_add (&builder, "{sv}", "remote-id",
++                         g_variant_new_object_path (remote_client->id));
++
++  return g_variant_builder_end (&builder);
++}
++
+ static void
+ on_incoming_new_connection (GrdRdpServer    *rdp_server,
+                             GrdSession      *session,
+@@ -693,6 +705,7 @@ on_incoming_new_connection (GrdRdpServer    *rdp_server,
+   GCancellable *cancellable =
+     grd_daemon_get_cancellable (GRD_DAEMON (daemon_system));
+   GrdRemoteClient *remote_client;
++  GVariant *properties_variant;
+ 
+   g_debug ("[DaemonSystem] Incoming connection without routing token");
+ 
+@@ -705,9 +718,10 @@ on_incoming_new_connection (GrdRdpServer    *rdp_server,
+   g_debug ("[DaemonSystem] Creating remote display with remote id: %s",
+            remote_client->id);
+ 
++  properties_variant = serialize_remote_display_properties (remote_client);
+   grd_dbus_gdm_remote_display_factory_call_create_remote_display (
+     daemon_system->remote_display_factory_proxy,
+-    remote_client->id,
++    properties_variant,
+     cancellable,
+     on_create_remote_display_finished,
+     remote_client);
+diff --git a/src/org.gnome.DisplayManager.xml b/src/org.gnome.DisplayManager.xml
+index 145fe219..14e61fdb 100644
+--- a/src/org.gnome.DisplayManager.xml
++++ b/src/org.gnome.DisplayManager.xml
+@@ -9,7 +9,7 @@
+   </interface>
+   <interface name="org.gnome.DisplayManager.RemoteDisplayFactory">
+     <method name="CreateRemoteDisplay">
+-      <arg name="remote_id" direction="in" type="o"/>
++      <arg name="properties" direction="in" type="a{sv}"/>
+     </method>
+   </interface>
+ </node>
+-- 
+2.54.0
+
+
+From a8bf29978d63028bb9d3cbe4aa36f51b1e5736d4 Mon Sep 17 00:00:00 2001
+From: Joan Torres Lopez <joantolo@redhat.com>
+Date: Fri, 14 Nov 2025 15:51:19 +0100
+Subject: [PATCH 10/22] daemon-system: Send hostname in CreateRemoteDisplay
+ properties
+
+Include the remote client's IP address in the properties dictionary
+sent to CreateRemoteDisplay.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/355>
+---
+ src/grd-daemon-system.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/grd-daemon-system.c b/src/grd-daemon-system.c
+index 5c909de0..df4b0cf1 100644
+--- a/src/grd-daemon-system.c
++++ b/src/grd-daemon-system.c
+@@ -694,6 +694,12 @@ serialize_remote_display_properties (GrdRemoteClient *remote_client)
+   g_variant_builder_add (&builder, "{sv}", "remote-id",
+                          g_variant_new_object_path (remote_client->id));
+ 
++  if (remote_client->hostname)
++    {
++      g_variant_builder_add (&builder, "{sv}", "hostname",
++                             g_variant_new_string (remote_client->hostname));
++    }
++
+   return g_variant_builder_end (&builder);
+ }
+ 
+-- 
+2.54.0
+
+
+From ab555d63d09c244e73fdd00fb531818cedb50c30 Mon Sep 17 00:00:00 2001
+From: Pascal Nowack <Pascal.Nowack@gmx.de>
+Date: Sat, 4 Apr 2026 17:18:34 +0200
+Subject: [PATCH 11/22] session-rdp: Remove stray return statement
+
+The correct error path happens via the goto-statement, which currently
+cannot be reached. Fix this issue by removing the stray return
+statement.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/397>
+---
+ src/grd-session-rdp.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/src/grd-session-rdp.c b/src/grd-session-rdp.c
+index 99f8f5a9..8b6f3aee 100644
+--- a/src/grd-session-rdp.c
++++ b/src/grd-session-rdp.c
+@@ -986,7 +986,6 @@ is_auth_identity_current_user (const SecPkgContext_AuthIdentity *auth_identity)
+     {
+       g_critical ("Failed to map principal '%s' name to local name",
+                   principal_string);
+-      return FALSE;
+       goto err;
+     }
+ 
+-- 
+2.54.0
+
+
+From 530fb6fd4c9ebeda975618a4b2b9631b9cb45a24 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Wed, 13 May 2026 23:44:33 +0200
+Subject: [PATCH 12/22] session/rdp: Remove stray whitespace
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/411>
+---
+ src/grd-session-rdp.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/grd-session-rdp.c b/src/grd-session-rdp.c
+index 8b6f3aee..6440c392 100644
+--- a/src/grd-session-rdp.c
++++ b/src/grd-session-rdp.c
+@@ -1550,7 +1550,7 @@ init_rdp_session (GrdSessionRdp  *session_rdp,
+   freerdp_settings_set_bool (rdp_settings, FreeRDP_AudioPlayback, TRUE);
+   freerdp_settings_set_bool (rdp_settings, FreeRDP_RemoteConsoleAudio, TRUE);
+ 
+-  peer->Logon =  rdp_peer_logon;
++  peer->Logon = rdp_peer_logon;
+   peer->Capabilities = rdp_peer_capabilities;
+   peer->PostConnect = rdp_peer_post_connect;
+   peer->Activate = rdp_peer_activate;
+-- 
+2.54.0
+
+
+From 471b175d61e52c33bf86312eb8388ffe91617859 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Thu, 14 May 2026 22:48:52 +0200
+Subject: [PATCH 13/22] daemon: Fix compilation with RDP backend disabled
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/411>
+---
+ src/grd-daemon.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/grd-daemon.c b/src/grd-daemon.c
+index 50bcd3d2..dcdb425e 100644
+--- a/src/grd-daemon.c
++++ b/src/grd-daemon.c
+@@ -43,10 +43,10 @@
+ #include "grd-types.h"
+ #include "grd-vnc-server.h"
+ 
+-#ifdef HAVE_LIBSYSTEMD
++#if defined(HAVE_LIBSYSTEMD) && defined(HAVE_RDP)
+ #include "grd-daemon-handover.h"
+ #include "grd-daemon-system.h"
+-#endif /* HAVE_LIBSYSTEMD */
++#endif /* HAVE_RDP && HAVE_LIBSYSTEMD */
+ 
+ #define RDP_SERVER_RESTART_DELAY_MS 3000
+ 
+@@ -1210,7 +1210,7 @@ main (int argc, char **argv)
+     case GRD_RUNTIME_MODE_HEADLESS:
+       daemon = GRD_DAEMON (grd_daemon_user_new (runtime_mode, &error));
+       break;
+-#ifdef HAVE_LIBSYSTEMD
++#if defined(HAVE_LIBSYSTEMD) && defined(HAVE_RDP)
+     case GRD_RUNTIME_MODE_SYSTEM:
+       daemon = GRD_DAEMON (grd_daemon_system_new (&error));
+       break;
+@@ -1222,7 +1222,7 @@ main (int argc, char **argv)
+     case GRD_RUNTIME_MODE_HANDOVER:
+       g_assert_not_reached ();
+       break;
+-#endif /* HAVE_LIBSYSTEMD */
++#endif /* defined(HAVE_LIBSYSTEMD) && defined(HAVE_RDP) */
+     }
+ 
+   if (!daemon)
+-- 
+2.54.0
+
+
+From e1d0b92989a0424fabfd0dc7329f0663f944e396 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Fri, 7 Aug 2026 10:40:35 +0200
+Subject: [PATCH 14/22] session/rdp: Refactor helper that authenticates
+ Kerberos principal
+
+The helper is split into two, one that gets the passwd entry and
+Kerberos principal name, and the original helper. The former will be
+used in a later commit for something else.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/411>
+---
+ src/grd-session-rdp.c | 76 ++++++++++++++++++++++++++++++-------------
+ 1 file changed, 54 insertions(+), 22 deletions(-)
+
+diff --git a/src/grd-session-rdp.c b/src/grd-session-rdp.c
+index 6440c392..cea4f257 100644
+--- a/src/grd-session-rdp.c
++++ b/src/grd-session-rdp.c
+@@ -950,8 +950,10 @@ get_effective_auth_method (rdpContext *rdp_context)
+   return auth_method;
+ }
+ 
+-static gboolean
+-is_auth_identity_current_user (const SecPkgContext_AuthIdentity *auth_identity)
++static struct passwd *
++get_pwd_entry_from_auth_identity (const SecPkgContext_AuthIdentity  *auth_identity,
++                                  char                             **out_principal_string,
++                                  GError                           **error)
+ {
+   krb5_error_code kret;
+   g_autofree char *principal_string = NULL;
+@@ -959,14 +961,14 @@ is_auth_identity_current_user (const SecPkgContext_AuthIdentity *auth_identity)
+   krb5_principal principal = NULL;
+   char local_name[256 + 1];
+   g_autofree struct passwd *pwd = NULL;
+-  g_autoptr (GError) error = NULL;
+-  uid_t current_uid;
++  g_autoptr (GError) local_error = NULL;
+ 
+   kret = krb5_init_context (&krb5_context);
+   if (kret)
+     {
+-      g_critical ("Failed to initialize krb5 context");
+-      return FALSE;
++      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
++                   "Failed to initialize krb5 context");
++      goto err;
+     }
+ 
+   principal_string = g_strdup_printf ("%s@%s",
+@@ -976,7 +978,8 @@ is_auth_identity_current_user (const SecPkgContext_AuthIdentity *auth_identity)
+   kret = krb5_parse_name (krb5_context, principal_string, &principal);
+   if (kret)
+     {
+-      g_critical ("Failed to parse principal string %s", principal_string);
++      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
++                   "Failed to parse principal string %s", principal_string);
+       goto err;
+     }
+ 
+@@ -984,35 +987,71 @@ is_auth_identity_current_user (const SecPkgContext_AuthIdentity *auth_identity)
+                                   sizeof (local_name), local_name);
+   if (kret)
+     {
+-      g_critical ("Failed to map principal '%s' name to local name",
+-                  principal_string);
++      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
++                   "Failed to map principal '%s' name to local name",
++                   principal_string);
+       goto err;
+     }
+ 
+-  pwd = g_unix_get_passwd_entry (local_name, &error);
+-  if (error)
++  pwd = g_unix_get_passwd_entry (local_name, &local_error);
++  if (local_error)
+     {
+-      g_critical ("Failed to get passwd field for %s: %s",
+-                  local_name, error->message);
++      g_propagate_error (error, local_error);
++      g_prefix_error (error, "Failed to get passwd field for %s:", local_name);
+       goto err;
+     }
+ 
+   if (!pwd)
+     {
+-      g_warning ("Tried to authenticate with invalid user %s", local_name);
++      g_set_error (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
++                   "Tried to authenticate with invalid user %s", local_name);
+       goto err;
+     }
+ 
+   krb5_free_principal (krb5_context, principal);
+   krb5_free_context (krb5_context);
+ 
++  if (out_principal_string)
++    *out_principal_string = g_steal_pointer (&principal_string);
++
++  return g_steal_pointer (&pwd);
++
++err:
++  if (principal)
++    krb5_free_principal (krb5_context, principal);
++  if (krb5_context)
++    krb5_free_context (krb5_context);
++  return NULL;
++}
++
++static gboolean
++is_auth_identity_current_user (const SecPkgContext_AuthIdentity *auth_identity)
++{
++  g_autoptr (GError) error = NULL;
++  g_autofree struct passwd *pwd = NULL;
++  g_autofree char *principal_string = NULL;
++  uid_t current_uid;
++
++  pwd = get_pwd_entry_from_auth_identity (auth_identity,
++                                          &principal_string,
++                                          &error);
++  if (!pwd)
++    {
++      if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_FAILED))
++        g_critical ("Failed to get passwd entry: %s", error->message);
++      else
++        g_warning ("Failed to get passwd entry: %s", error->message);
++
++      return FALSE;
++    }
++
+   current_uid = getuid ();
+   if (pwd->pw_uid == current_uid)
+     {
+       g_debug ("[RDP] Kerberos principal %s match current user %s (%u), "
+                "accepting.",
+                principal_string,
+-               local_name,
++               pwd->pw_name,
+                current_uid);
+       return TRUE;
+     }
+@@ -1020,13 +1059,6 @@ is_auth_identity_current_user (const SecPkgContext_AuthIdentity *auth_identity)
+     {
+       return FALSE;
+     }
+-
+-err:
+-  if (principal)
+-    krb5_free_principal (krb5_context, principal);
+-  if (krb5_context)
+-    krb5_free_context (krb5_context);
+-  return FALSE;
+ }
+ 
+ static BOOL
+-- 
+2.54.0
+
+
+From a0d61fbee348708d8076abc91fc6ae25e54b0cbe Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Tue, 11 Aug 2026 16:14:24 +0200
+Subject: [PATCH 15/22] setting: Don't leak kerberos keytab field
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/411>
+---
+ src/grd-settings.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/grd-settings.c b/src/grd-settings.c
+index 2215e69a..081b4724 100644
+--- a/src/grd-settings.c
++++ b/src/grd-settings.c
+@@ -382,6 +382,7 @@ grd_settings_finalize (GObject *object)
+   g_clear_pointer (&priv->rdp.server_key, g_free);
+   g_clear_pointer (&priv->rdp.server_cert_path, g_free);
+   g_clear_pointer (&priv->rdp.server_key_path, g_free);
++  g_clear_pointer (&priv->rdp.kerberos_keytab, g_free);
+   g_clear_object (&priv->credentials);
+ 
+   G_OBJECT_CLASS (grd_settings_parent_class)->finalize (object);
+-- 
+2.54.0
+
+
+From 9e6b54802d0342126f7df0443211233ba63824de Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Fri, 7 Aug 2026 10:56:29 +0200
+Subject: [PATCH 16/22] settings/system: Add read/write support for auth
+ methods and krb keytab
+
+This is in preparation for system level Kerberos authentication.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/411>
+---
+ src/grd-settings-system.c | 93 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 93 insertions(+)
+
+diff --git a/src/grd-settings-system.c b/src/grd-settings-system.c
+index 531732ad..a5eb35cb 100644
+--- a/src/grd-settings-system.c
++++ b/src/grd-settings-system.c
+@@ -24,6 +24,9 @@
+ 
+ #include <gio/gio.h>
+ #include <glib/gstdio.h>
++#include <stdint.h>
++
++#include "grd-enum-types.h"
+ 
+ #define GRD_SETTINGS_SYSTEM_GROUP_RDP "RDP"
+ 
+@@ -468,6 +471,94 @@ write_boolean (GrdSettingsSystem *settings_system,
+                           value);
+ }
+ 
++static void
++read_flags (GrdSettingsSystem *settings_system,
++            GKeyFile          *key_file,
++            const char        *group,
++            const char        *key,
++            const char        *settings_name)
++{
++  g_autoptr (GError) error = NULL;
++  g_auto (GStrv) values = NULL;
++  char **value;
++  uint32_t flags = 0;
++  GType flags_type;
++  g_autoptr (GFlagsClass) flags_class = NULL;
++
++  values = g_key_file_get_string_list (key_file, group, key, NULL, &error);
++  if (error && error->code != G_KEY_FILE_ERROR_KEY_NOT_FOUND)
++    return;
++
++  if (!values)
++    return;
++
++  if (strcmp (key, "auth-methods") == 0)
++    flags_type = GRD_TYPE_RDP_AUTH_METHODS;
++  else
++    g_assert_not_reached ();
++
++  flags_class = g_type_class_ref (flags_type);
++
++  for (value = &values[0]; *value; value++)
++    {
++      GFlagsValue *flags_value;
++
++      flags_value = g_flags_get_value_by_nick (flags_class, *value);
++      if (!flags_value)
++        {
++          g_warning ("Invalid flags value '%s'", *value);
++          continue;
++        }
++      flags |= flags_value->value;
++    }
++
++  g_object_set (G_OBJECT (settings_system), settings_name, flags, NULL);
++}
++
++static void
++write_flags (GrdSettingsSystem *settings_system,
++             GKeyFile          *key_file,
++             const char        *group,
++             const char        *key,
++             const char        *settings_name)
++{
++  uint32_t value = 0;
++  GType flags_type;
++  g_autoptr (GFlagsClass) flags_class = NULL;
++  g_autoptr (GStrvBuilder) strv_builder = NULL;
++  g_auto (GStrv) flag_strings = NULL;
++  int i;
++
++  if (strcmp (key, "auth-methods") == 0)
++    flags_type = GRD_TYPE_RDP_AUTH_METHODS;
++  else
++    g_assert_not_reached ();
++
++  g_object_get (G_OBJECT (settings_system), settings_name, &value, NULL);
++
++  flags_class = g_type_class_ref (flags_type);
++
++  strv_builder = g_strv_builder_new ();
++  for (i = 0; i < flags_class->n_values; i++)
++    {
++      GFlagsValue *flags_value = &flags_class->values[i];
++
++      if (flags_value->value & value)
++        {
++          value &= ~flags_value->value;
++          g_strv_builder_add (strv_builder, flags_value->value_nick);
++        }
++    }
++  g_warn_if_fail (!value);
++
++  flag_strings = g_strv_builder_end (strv_builder);
++
++  g_key_file_set_string_list (key_file,
++                              group,
++                              key,
++                              (const char * const *) flag_strings,
++                              g_strv_length (flag_strings));
++}
+ 
+ static const FileSetting rdp_file_settings[] =
+ {
+@@ -475,6 +566,8 @@ static const FileSetting rdp_file_settings[] =
+   { "tls-cert", "rdp-server-cert-path", read_filename, write_string },
+   { "tls-key", "rdp-server-key-path", read_filename, write_string },
+   { "port", "rdp-port", read_int, write_int },
++  { "auth-methods", "rdp-auth-methods", read_flags, write_flags },
++  { "kerberos-keytab", "rdp-kerberos-keytab", read_filename, write_string },
+ };
+ 
+ static void
+-- 
+2.54.0
+
+
+From e13e51f29f987c40ba14c1e4d724c17305f7a675 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Fri, 7 Aug 2026 10:57:31 +0200
+Subject: [PATCH 17/22] ctl: Allow configuring system auth method and kerberos
+ keytab
+
+This in preparation for system level Kerberos authentication.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/411>
+---
+ src/grd-ctl.c | 15 ---------------
+ 1 file changed, 15 deletions(-)
+
+diff --git a/src/grd-ctl.c b/src/grd-ctl.c
+index 8bb1697e..5953608e 100644
+--- a/src/grd-ctl.c
++++ b/src/grd-ctl.c
+@@ -292,14 +292,6 @@ rdp_set_auth_methods (GrdSettings  *settings,
+       return FALSE;
+     }
+ 
+-  if ((auth_methods & GRD_RDP_AUTH_METHOD_KERBEROS) &&
+-      GRD_IS_SETTINGS_SYSTEM (settings))
+-    {
+-      g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+-                   "Kerberos not supported in the system daemon");
+-      return FALSE;
+-    }
+-
+   g_object_set (G_OBJECT (settings), "rdp-auth-methods", auth_methods, NULL);
+   return TRUE;
+ }
+@@ -350,13 +342,6 @@ rdp_set_kerberos_keytab (GrdSettings  *settings,
+ {
+   char *path = argv[0];
+ 
+-  if (GRD_IS_SETTINGS_SYSTEM (settings))
+-    {
+-      g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+-                   "Kerberos not supported in the system daemon");
+-      return FALSE;
+-    }
+-
+   if (!g_path_is_absolute (path))
+     {
+       g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+-- 
+2.54.0
+
+
+From 460074f99b7d169e10f5b66aeb141b9fb3a85c04 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Fri, 7 Aug 2026 12:12:47 +0200
+Subject: [PATCH 18/22] daemon/system: Simplify remote_client_new()
+
+A session has been unconditionally passed since 9d11bc6e
+("daemon-system: Respect existing remote_id from third-party remote
+displays").
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/411>
+---
+ src/grd-daemon-system.c | 8 +++-----
+ 1 file changed, 3 insertions(+), 5 deletions(-)
+
+diff --git a/src/grd-daemon-system.c b/src/grd-daemon-system.c
+index df4b0cf1..f1318da0 100644
+--- a/src/grd-daemon-system.c
++++ b/src/grd-daemon-system.c
+@@ -591,14 +591,12 @@ remote_client_new (GrdDaemonSystem *daemon_system,
+ {
+   GrdRemoteClient *remote_client;
+ 
++  g_assert (session);
++
+   remote_client = g_new0 (GrdRemoteClient, 1);
+   remote_client->id = get_next_available_id (daemon_system);
+   remote_client->daemon_system = daemon_system;
+-  remote_client->needs_handover = session != NULL;
+-
+-  if (!session)
+-    return remote_client;
+-
++  remote_client->needs_handover = TRUE;
+   remote_client->hostname = try_get_hostname (GRD_SESSION_RDP (session));
+   remote_client->is_client_mstsc = grd_session_rdp_is_client_mstsc (GRD_SESSION_RDP (session));
+   remote_client->session = session;
+-- 
+2.54.0
+
+
+From 400928c4dde4e0fba9606179c0332e938b4396a6 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Fri, 7 Aug 2026 15:54:25 +0200
+Subject: [PATCH 19/22] daemon/system: Gracefully handling the session going
+ away
+
+If the session outlives the remote client, we'd have a weak ref for a
+session that is associated with an already-freed remote client,
+when the session is later disposed, this would cause a use-after-free.
+
+Fix this by removing the weak ref when freeing the remote client.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/411>
+---
+ src/grd-daemon-system.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/src/grd-daemon-system.c b/src/grd-daemon-system.c
+index f1318da0..01c29f03 100644
+--- a/src/grd-daemon-system.c
++++ b/src/grd-daemon-system.c
+@@ -103,6 +103,9 @@ on_gdm_remote_display_session_id_changed (GrdDBusGdmRemoteDisplay *remote_displa
+                                           GParamSpec              *pspec,
+                                           GrdRemoteClient         *remote_client);
+ 
++static void
++session_disposed (GrdRemoteClient *remote_client);
++
+ static void
+ disconnect_from_remote_display (GrdRemoteClient *remote_client)
+ {
+@@ -524,6 +527,13 @@ unregister_handover_iface (GrdRemoteClient   *remote_client,
+ static void
+ grd_remote_client_free (GrdRemoteClient *remote_client)
+ {
++  if (remote_client->session)
++    {
++      g_object_weak_unref (G_OBJECT (remote_client->session),
++                           (GWeakNotify) session_disposed,
++                           remote_client);
++    }
++
+   disconnect_from_remote_display (remote_client);
+ 
+   g_clear_pointer (&remote_client->id, g_free);
+-- 
+2.54.0
+
+
+From acb2a9bfa63d819d978cc7e8601c2b20eedd22c8 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Tue, 11 Aug 2026 16:13:42 +0200
+Subject: [PATCH 20/22] session/rdp: Allow no configured credentials when only
+ using Kerberos
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/411>
+---
+ src/grd-session-rdp.c | 42 +++++++++++++++++++++---------------------
+ 1 file changed, 21 insertions(+), 21 deletions(-)
+
+diff --git a/src/grd-session-rdp.c b/src/grd-session-rdp.c
+index cea4f257..a1bb27a9 100644
+--- a/src/grd-session-rdp.c
++++ b/src/grd-session-rdp.c
+@@ -1419,14 +1419,15 @@ rdp_peer_context_new (freerdp_peer   *peer,
+ 
+ static gboolean
+ init_rdp_session (GrdSessionRdp  *session_rdp,
+-                  const char     *username,
+-                  const char     *password,
+                   GError        **error)
+ {
+   GrdContext *context = grd_session_get_context (GRD_SESSION (session_rdp));
+   GrdSettings *settings = grd_context_get_settings (context);
+   GSocket *socket = g_socket_connection_get_socket (session_rdp->connection);
++  g_autoptr (GError) local_error = NULL;
+   GrdRdpAuthMethods auth_methods = 0;
++  g_autofree char *username = NULL;
++  g_autofree char *password = NULL;
+   g_autofree char *server_cert = NULL;
+   g_autofree char *server_key = NULL;
+   gboolean use_client_configs;
+@@ -1438,6 +1439,16 @@ init_rdp_session (GrdSessionRdp  *session_rdp,
+   rdpCertificate *rdp_certificate = NULL;
+   rdpPrivateKey *rdp_private_key = NULL;
+ 
++  grd_settings_get_rdp_credentials (settings,
++                                    &username, &password,
++                                    &local_error);
++  if (local_error)
++    {
++      g_propagate_prefixed_error (error, g_steal_pointer (&local_error),
++                                  "Couldn't retrieve RDP credentials: ");
++      return FALSE;
++    }
++
+   use_client_configs = session_rdp->screen_share_mode ==
+                        GRD_RDP_SCREEN_SHARE_MODE_EXTEND;
+ 
+@@ -1475,6 +1486,13 @@ init_rdp_session (GrdSessionRdp  *session_rdp,
+ 
+   if (auth_methods & GRD_RDP_AUTH_METHOD_CREDENTIALS)
+     {
++      if (!username || !password)
++        {
++          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
++                       "Credentials are not set");
++          return FALSE;
++        }
++
+       session_rdp->sam_file = grd_rdp_sam_create_sam_file (username, password);
+       if (!session_rdp->sam_file)
+         {
+@@ -1763,23 +1781,10 @@ grd_session_rdp_new (GrdRdpServer      *rdp_server,
+   g_autoptr (GrdSessionRdp) session_rdp = NULL;
+   GrdContext *context;
+   GrdSettings *settings;
+-  char *username;
+-  char *password;
+   g_autoptr (GError) error = NULL;
+ 
+   context = grd_rdp_server_get_context (rdp_server);
+   settings = grd_context_get_settings (context);
+-  if (!grd_settings_get_rdp_credentials (settings,
+-                                         &username, &password,
+-                                         &error))
+-    {
+-      if (error)
+-        g_warning ("[RDP] Couldn't retrieve RDP credentials: %s", error->message);
+-      else
+-        g_message ("[RDP] Credentials are not set, denying client");
+-
+-      return NULL;
+-    }
+ 
+   session_rdp = g_object_new (GRD_TYPE_SESSION_RDP,
+                               "context", context,
+@@ -1805,11 +1810,9 @@ grd_session_rdp_new (GrdRdpServer      *rdp_server,
+                                 hwaccel_vulkan,
+                                 hwaccel_nvidia);
+ 
+-  if (!init_rdp_session (session_rdp, username, password, &error))
++  if (!init_rdp_session (session_rdp, &error))
+     {
+       g_warning ("[RDP] Couldn't initialize session: %s", error->message);
+-      g_free (password);
+-      g_free (username);
+       return NULL;
+     }
+ 
+@@ -1817,9 +1820,6 @@ grd_session_rdp_new (GrdRdpServer      *rdp_server,
+                                              socket_thread_func,
+                                              session_rdp);
+ 
+-  g_free (password);
+-  g_free (username);
+-
+   return g_steal_pointer (&session_rdp);
+ }
+ 
+-- 
+2.54.0
+
+
+From 921fcad1cdb24951b75add72dde23cb38afc4391 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Fri, 7 Aug 2026 15:57:34 +0200
+Subject: [PATCH 21/22] Support Kerberos based remote login
+
+This fully performs the Kerberos authentication, mapping a resolved
+Kerberos principal with a local user account. A remote display manager
+display is created with this user set as 'preauthenticated', allowing
+GDM to bypass any additional authentication.
+
+This does not yet make use of any TGT (ticket granting ticket)
+mechanisms, but makes GDM fully trust gnome-remote-desktop's system
+daemon to have performed the user authentication.
+
+Configuration is done the same way as when configuring Kerberos
+authentication for the single user headless session.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/411>
+---
+ src/grd-daemon-system.c | 17 +++++++
+ src/grd-session-rdp.c   | 98 ++++++++++++++++++++++++++++++++++-------
+ src/grd-session-rdp.h   |  2 +
+ 3 files changed, 101 insertions(+), 16 deletions(-)
+
+diff --git a/src/grd-daemon-system.c b/src/grd-daemon-system.c
+index 01c29f03..7befc18e 100644
+--- a/src/grd-daemon-system.c
++++ b/src/grd-daemon-system.c
+@@ -53,6 +53,7 @@ typedef struct
+ 
+   char *id;
+   char *hostname;
++  char *preauthenticated_user;
+ 
+   GrdSession *session;
+   GSocketConnection *socket_connection;
+@@ -538,6 +539,7 @@ grd_remote_client_free (GrdRemoteClient *remote_client)
+ 
+   g_clear_pointer (&remote_client->id, g_free);
+   g_clear_pointer (&remote_client->hostname, g_free);
++  g_clear_pointer (&remote_client->preauthenticated_user, g_free);
+   g_clear_object (&remote_client->socket_connection);
+   unregister_handover_iface (remote_client, remote_client->handover_src);
+   unregister_handover_iface (remote_client, remote_client->handover_dst);
+@@ -600,6 +602,7 @@ remote_client_new (GrdDaemonSystem *daemon_system,
+                    GrdSession      *session)
+ {
+   GrdRemoteClient *remote_client;
++  const char *preauthenticated_user;
+ 
+   g_assert (session);
+ 
+@@ -610,6 +613,12 @@ remote_client_new (GrdDaemonSystem *daemon_system,
+   remote_client->hostname = try_get_hostname (GRD_SESSION_RDP (session));
+   remote_client->is_client_mstsc = grd_session_rdp_is_client_mstsc (GRD_SESSION_RDP (session));
+   remote_client->session = session;
++
++  preauthenticated_user =
++    grd_session_rdp_get_preauthenticated_username (GRD_SESSION_RDP (session));
++  if (preauthenticated_user)
++    remote_client->preauthenticated_user = g_strdup (preauthenticated_user);
++
+   g_object_weak_ref (G_OBJECT (session),
+                      (GWeakNotify) session_disposed,
+                      remote_client);
+@@ -708,6 +717,14 @@ serialize_remote_display_properties (GrdRemoteClient *remote_client)
+                              g_variant_new_string (remote_client->hostname));
+     }
+ 
++  if (remote_client->preauthenticated_user)
++    {
++      GVariant *variant;
++
++      variant = g_variant_new_string (remote_client->preauthenticated_user);
++      g_variant_builder_add (&builder, "{sv}", "preauthenticated-user", variant);
++    }
++
+   return g_variant_builder_end (&builder);
+ }
+ 
+diff --git a/src/grd-session-rdp.c b/src/grd-session-rdp.c
+index a1bb27a9..be69140e 100644
+--- a/src/grd-session-rdp.c
++++ b/src/grd-session-rdp.c
+@@ -104,6 +104,13 @@ struct _GrdSessionRdp
+   GThread *socket_thread;
+   HANDLE stop_event;
+ 
++  struct
++  {
++    uid_t uid;
++    char *username;
++    gboolean has_authenticated_user;
++  } kerberos_login;
++
+   GrdRdpRenderer *renderer;
+   GrdRdpCursorRenderer *cursor_renderer;
+ 
+@@ -394,6 +401,12 @@ grd_session_rdp_send_server_redirection (GrdSessionRdp *session_rdp,
+   return TRUE;
+ }
+ 
++const char *
++grd_session_rdp_get_preauthenticated_username (GrdSessionRdp *session_rdp)
++{
++  return session_rdp->kerberos_login.username;
++}
++
+ static void
+ maybe_queue_close_session_idle (GrdSessionRdp *session_rdp)
+ {
+@@ -1061,6 +1074,42 @@ is_auth_identity_current_user (const SecPkgContext_AuthIdentity *auth_identity)
+     }
+ }
+ 
++static gboolean
++populate_pre_authenticated_user (GrdSessionRdp                     *session_rdp,
++                                 const SecPkgContext_AuthIdentity  *auth_identity,
++                                 GError                           **error)
++{
++  g_autofree struct passwd *pwd = NULL;
++  g_autofree char *principal_string = NULL;
++
++  pwd = get_pwd_entry_from_auth_identity (auth_identity,
++                                          &principal_string,
++                                          error);
++  if (!pwd)
++    {
++      g_prefix_error (error, "Failed to get passwd entry: ");
++      return FALSE;
++    }
++
++  if (pwd->pw_uid == 0)
++    {
++      g_set_error (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
++                   "Denying attempt to login as root");
++      return FALSE;
++    }
++
++  g_debug ("[RDP] Kerberos principal %s matches local user %s (%u).",
++           principal_string,
++           pwd->pw_name,
++           pwd->pw_uid);
++
++  session_rdp->kerberos_login.uid = pwd->pw_uid;
++  session_rdp->kerberos_login.username = g_strdup (pwd->pw_name);
++  session_rdp->kerberos_login.has_authenticated_user = TRUE;
++
++  return TRUE;
++}
++
+ static BOOL
+ rdp_peer_logon (freerdp_peer                  *peer,
+                 const SEC_WINNT_AUTH_IDENTITY *identity,
+@@ -1074,7 +1123,7 @@ rdp_peer_logon (freerdp_peer                  *peer,
+   SECURITY_STATUS status;
+   SecPkgContext_AuthIdentity auth_identity = {};
+ 
+-  if (is_using_remote_login (session_rdp))
++  if (grd_context_get_runtime_mode (context) == GRD_RUNTIME_MODE_HANDOVER)
+     return TRUE;
+ 
+   auth_method = get_effective_auth_method (rdp_context);
+@@ -1103,26 +1152,42 @@ rdp_peer_logon (freerdp_peer                  *peer,
+       return FALSE;
+     }
+ 
+-  switch (grd_context_get_runtime_mode (context))
++  if (is_using_remote_login (session_rdp))
+     {
+-    case GRD_RUNTIME_MODE_HEADLESS:
+-    case GRD_RUNTIME_MODE_SCREEN_SHARE:
+-      if (is_auth_identity_current_user (&auth_identity))
++      g_autoptr (GError) error = NULL;
++
++      if (!populate_pre_authenticated_user (session_rdp, &auth_identity,
++                                            &error))
+         {
+-          return TRUE;
++          g_warning ("[RDP] Failed to populate pre-authenticated user: %s",
++                     error->message);
++          return FALSE;
+         }
+-      else
++
++      return TRUE;
++    }
++  else
++    {
++      switch (grd_context_get_runtime_mode (context))
+         {
+-          g_debug ("[RDP] Kerberos principal doesn't match current user, "
+-                   "disconnecting");
+-          return FALSE;
++        case GRD_RUNTIME_MODE_HEADLESS:
++        case GRD_RUNTIME_MODE_SCREEN_SHARE:
++          if (is_auth_identity_current_user (&auth_identity))
++            {
++              return TRUE;
++            }
++          else
++            {
++              g_debug ("[RDP] Kerberos principal doesn't match current user, "
++                       "disconnecting");
++              return FALSE;
++            }
++        case GRD_RUNTIME_MODE_SYSTEM:
++        case GRD_RUNTIME_MODE_HANDOVER:
++          g_assert_not_reached ();
+         }
+-    case GRD_RUNTIME_MODE_SYSTEM:
+-    case GRD_RUNTIME_MODE_HANDOVER:
+       g_assert_not_reached ();
+     }
+-
+-  g_assert_not_reached ();
+ }
+ 
+ static uint32_t
+@@ -1504,8 +1569,7 @@ init_rdp_session (GrdSessionRdp  *session_rdp,
+                                    session_rdp->sam_file->filename);
+     }
+ 
+-  if (auth_methods & GRD_RDP_AUTH_METHOD_KERBEROS &&
+-      !is_using_remote_login (session_rdp))
++  if (auth_methods & GRD_RDP_AUTH_METHOD_KERBEROS)
+     {
+       g_autofree char *kerberos_keytab = NULL;
+ 
+@@ -2104,6 +2168,8 @@ grd_session_rdp_dispose (GObject *object)
+   g_assert (!session_rdp->notify_post_connected_source_id);
+   g_assert (!session_rdp->cursor_renderer);
+ 
++  g_clear_pointer (&session_rdp->kerberos_login.username, g_free);
++
+   g_clear_object (&session_rdp->layout_manager);
+   clear_rdp_peer (session_rdp);
+ 
+diff --git a/src/grd-session-rdp.h b/src/grd-session-rdp.h
+index 8b05a955..ae52af74 100644
+--- a/src/grd-session-rdp.h
++++ b/src/grd-session-rdp.h
+@@ -81,4 +81,6 @@ gboolean grd_session_rdp_send_server_redirection (GrdSessionRdp *session_rdp,
+                                                   const char    *password,
+                                                   const char    *certificate);
+ 
++const char * grd_session_rdp_get_preauthenticated_username (GrdSessionRdp *session_rdp);
++
+ GSocketConnection *grd_session_rdp_get_socket_connection (GrdSessionRdp *session_rdp);
+-- 
+2.54.0
+
+
+From 070c193f95df68bbca1099f017d0dc7ea957afef Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Tue, 25 Aug 2026 21:35:46 +0200
+Subject: [PATCH 22/22] session/rdp: Steal pointer when propagating error
+
+When propagating, the source error ownership is transfer-full so we must
+not free it when leaving the scope.
+
+Fixes: 663426e0 ("session/rdp: Refactor helper that authenticates Kerberos principal")
+---
+ src/grd-session-rdp.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/grd-session-rdp.c b/src/grd-session-rdp.c
+index be69140e..713a65fa 100644
+--- a/src/grd-session-rdp.c
++++ b/src/grd-session-rdp.c
+@@ -1009,7 +1009,7 @@ get_pwd_entry_from_auth_identity (const SecPkgContext_AuthIdentity  *auth_identi
+   pwd = g_unix_get_passwd_entry (local_name, &local_error);
+   if (local_error)
+     {
+-      g_propagate_error (error, local_error);
++      g_propagate_error (error, g_steal_pointer (&local_error));
+       g_prefix_error (error, "Failed to get passwd field for %s:", local_name);
+       goto err;
+     }
+-- 
+2.54.0
+

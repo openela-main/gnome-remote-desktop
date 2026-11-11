@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tomas Pelka <tpelka@redhat.com>
+Date: Wed, 30 Sep 2026 16:30:00 +0200
+Subject: [PATCH] systemd: Set KRB5RCACHEDIR to %t/gnome-remote-desktop across
+ service units
+
+When authenticating RDP clients via Kerberos NLA, libkrb5 creates a
+host replay cache file. By default, it creates /var/tmp/krb5_<UID>.rcache2.
+Because system accounts on RHEL 10 are allocated dynamically by sysusers,
+the UID of gnome-remote-desktop is not fixed, causing SELinux denials when
+attempting to create files in /var/tmp without fixed-name type transitions.
+
+Direct libkrb5 to store replay cache files on tmpfs under
+%t/gnome-remote-desktop ($XDG_RUNTIME_DIR/gnome-remote-desktop or
+/run/gnome-remote-desktop). This ensures all Kerberos replay caches
+remain volatile, behave like /tmp without persisting across reboots,
+and are cleaned up automatically on logout or service termination.
+
+Triggered by: https://redhat.atlassian.net/browse/RHEL-246392
+Resolves: https://redhat.atlassian.net/browse/RHEL-3732
+---
+ data/gnome-remote-desktop-headless.service.in | 3 +++
+ data/gnome-remote-desktop-system.service.in   | 3 +++
+ data/gnome-remote-desktop.service.in          | 3 +++
+ 3 files changed, 9 insertions(+)
+
+diff --git a/data/gnome-remote-desktop-headless.service.in b/data/gnome-remote-desktop-headless.service.in
+index a9cb8fe..18f4078 100644
+--- a/data/gnome-remote-desktop-headless.service.in
++++ b/data/gnome-remote-desktop-headless.service.in
+@@ -5,6 +5,9 @@ Conflicts=gnome-remote-desktop.service
+ [Service]
+ Type=dbus
+ BusName=org.gnome.RemoteDesktop.Headless
++Environment=KRB5RCACHEDIR=%t/gnome-remote-desktop
++RuntimeDirectory=gnome-remote-desktop
++RuntimeDirectoryMode=0700
+ ExecStart=@libexecdir@/gnome-remote-desktop-daemon --headless
+ Restart=on-failure
+ 
+diff --git a/data/gnome-remote-desktop-system.service.in b/data/gnome-remote-desktop-system.service.in
+index 1941d3d..21ce9e1 100644
+--- a/data/gnome-remote-desktop-system.service.in
++++ b/data/gnome-remote-desktop-system.service.in
+@@ -5,6 +5,9 @@ Description=GNOME Remote Desktop
+ Type=dbus
+ User=@GRD_USERNAME@
+ BusName=org.gnome.RemoteDesktop
++Environment=KRB5RCACHEDIR=%t/gnome-remote-desktop
++RuntimeDirectory=gnome-remote-desktop
++RuntimeDirectoryMode=0700
+ ExecStart=@libexecdir@/gnome-remote-desktop-daemon --system
+ Restart=on-failure
+ 
+diff --git a/data/gnome-remote-desktop.service.in b/data/gnome-remote-desktop.service.in
+index be6ca82..3a75871 100644
+--- a/data/gnome-remote-desktop.service.in
++++ b/data/gnome-remote-desktop.service.in
+@@ -4,6 +4,9 @@ Description=GNOME Remote Desktop
+ [Service]
+ Type=dbus
+ BusName=org.gnome.RemoteDesktop.User
++Environment=KRB5RCACHEDIR=%t/gnome-remote-desktop
++RuntimeDirectory=gnome-remote-desktop
++RuntimeDirectoryMode=0700
+ ExecStart=@libexecdir@/gnome-remote-desktop-daemon
+ Restart=on-failure
+ 
+-- 
+2.47.0
