@@ -261,7 +261,7 @@ index 8fc7185..7150049 100644
  GrdSessionVnc *grd_session_vnc_new (GrdVncServer      *vnc_server,
                                      GSocketConnection *connection);
  
-@@ -62,4 +65,20 @@ void grd_session_vnc_set_client_clipboard_text (GrdSessionVnc *session_vnc,
+@@ -62,4 +65,18 @@ void grd_session_vnc_set_client_clipboard_text (GrdSessionVnc *session_vnc,
  int grd_session_vnc_get_stride_for_width (GrdSessionVnc *session_vnc,
                                            int            width);
  
@@ -280,8 +280,6 @@ index 8fc7185..7150049 100644
 +                                    GrdVncSocketGrabFunc  grab_func);
 +
 +GrdVncServer * grd_session_vnc_get_vnc_server (GrdSessionVnc *session_vnc);
-+
-+#endif /* GRD_SESSION_VNC_H */
 diff --git a/src/grd-settings-user.c b/src/grd-settings-user.c
 index 1bd679e..9420516 100644
 --- a/src/grd-settings-user.c
@@ -1192,15 +1190,13 @@ diff --git a/src/grd-session-vnc.h b/src/grd-session-vnc.h
 index 7150049..e6c37d9 100644
 --- a/src/grd-session-vnc.h
 +++ b/src/grd-session-vnc.h
-@@ -79,6 +79,8 @@ void grd_session_vnc_grab_socket (GrdSessionVnc        *session_vnc,
+@@ -79,4 +79,6 @@ void grd_session_vnc_grab_socket (GrdSessionVnc        *session_vnc,
  void grd_session_vnc_ungrab_socket (GrdSessionVnc        *session_vnc,
                                      GrdVncSocketGrabFunc  grab_func);
  
 +void grd_session_vnc_dispatch (GrdSessionVnc *session_vnc);
 +
  GrdVncServer * grd_session_vnc_get_vnc_server (GrdSessionVnc *session_vnc);
- 
- #endif /* GRD_SESSION_VNC_H */
 -- 
 2.51.1
 
