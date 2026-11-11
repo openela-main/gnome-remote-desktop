@@ -1,0 +1,29 @@
+From 1e91ad3515d9e479dabc2221cb4b176eb74bb55a Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Tue, 20 Oct 2026 15:57:55 +0800
+Subject: [PATCH 2/2] vnc/tls: Fix reading from within the peek buffer
+
+Related: CVE-2026-109833
+---
+ src/grd-vnc-tls.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/grd-vnc-tls.c b/src/grd-vnc-tls.c
+index f3ef1efe..b1d7c020 100644
+--- a/src/grd-vnc-tls.c
++++ b/src/grd-vnc-tls.c
+@@ -239,9 +239,10 @@ grd_vnc_tls_read_from_socket (rfbClientPtr  rfb_client,
+   if (to_read < tls_session->peek_buffer_len)
+     {
+       memcpy (buf, tls_session->peek_buffer, to_read);
+-      memmove (buf,
++      memmove (tls_session->peek_buffer,
+                tls_session->peek_buffer + to_read,
+                tls_session->peek_buffer_len - to_read);
++      tls_session->peek_buffer_len =- to_read;
+       len_read = to_read;
+       to_read = 0;
+     }
+-- 
+2.54.0
+

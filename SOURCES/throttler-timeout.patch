@@ -1,0 +1,1262 @@
+From ce55475c18e5e34ded0d75eee6d1f1d73ace7bf6 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Thu, 25 Jun 2026 22:27:27 +0200
+Subject: [PATCH 01/13] throttler: Add 'namespace' to throttler debug output
+
+This makes it easier to grep.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/402>
+(cherry picked from commit abbae36f89f600bd86289bb9c3bc884a846b21e0)
+---
+ src/grd-throttler.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/grd-throttler.c b/src/grd-throttler.c
+index 9ec31b35..f1ec37d1 100644
+--- a/src/grd-throttler.c
++++ b/src/grd-throttler.c
+@@ -149,7 +149,7 @@ grd_throttler_deny_connection (GrdThrottler      *throttler,
+                                const char        *peer_name,
+                                GSocketConnection *connection)
+ {
+-  g_debug ("Denying connection from %s", peer_name);
++  g_debug ("[Throttler] Denying connection from %s", peer_name);
+   g_io_stream_close (G_IO_STREAM (connection), NULL, NULL);
+ }
+ 
+@@ -173,7 +173,7 @@ grd_throttler_allow_connection (GrdThrottler      *throttler,
+                                 GSocketConnection *connection,
+                                 GrdPeer           *peer)
+ {
+-  g_debug ("Accepting connection from %s", peer->name);
++  g_debug ("[Throttler] Accepting connection from %s", peer->name);
+ 
+   throttler->allow_callback (throttler, connection, throttler->user_data);
+ 
+@@ -362,7 +362,7 @@ maybe_delay_connection (GrdThrottler      *throttler,
+       return;
+     }
+ 
+-  g_debug ("Delaying connection from %s", peer->name);
++  g_debug ("[Throttler] Delaying connection from %s", peer->name);
+ 
+   g_queue_push_head (delayed_connections, g_object_ref (connection));
+   maybe_queue_timeout (throttler);
+@@ -412,7 +412,7 @@ grd_throttler_handle_connection (GrdThrottler      *throttler,
+     g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (remote_address));
+   peer_name = g_inet_address_to_string (inet_address);
+ 
+-  g_debug ("New incoming connection from %s", peer_name);
++  g_debug ("[Throttler] New incoming connection from %s", peer_name);
+ 
+   peer = ensure_peer (throttler, peer_name);
+ 
+-- 
+2.31.1
+
+
+From b3b966fbc4ff1b02be20e247fc4288d0f95255a4 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Thu, 25 Jun 2026 14:05:51 +0200
+Subject: [PATCH 02/13] throttler: Replace connecting to notify::closed to
+ qdata callback
+
+Using the notify::closed signal was insufficient since it was not
+implicitly signalled when the socket was closed due to the last
+reference to the object was released, meaning one needed to manually
+emit it when appropriate. Replace this by storing enough state in the
+already used qdata data bank to allow us to do the equivalent cleanup
+when the socket is freed, which should be the same time that it is
+closed in our case.
+
+Closes: https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/work_items/332
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/402>
+(cherry picked from commit ecd871dd679e3b68e79cd857aa32a04df1aec8ff)
+---
+ src/grd-session-vnc.c |  1 -
+ src/grd-throttler.c   | 41 ++++++++++++++++++++++++++++++-----------
+ src/grd-utils.c       |  6 ------
+ src/grd-utils.h       |  2 --
+ 4 files changed, 30 insertions(+), 20 deletions(-)
+
+diff --git a/src/grd-session-vnc.c b/src/grd-session-vnc.c
+index ec8661ca..00bbbd6e 100644
+--- a/src/grd-session-vnc.c
++++ b/src/grd-session-vnc.c
+@@ -814,7 +814,6 @@ grd_session_vnc_stop (GrdSession *session)
+ 
+   grd_session_vnc_pause (session_vnc);
+ 
+-  grd_close_connection_and_notify (session_vnc->connection);
+   g_clear_object (&session_vnc->connection);
+   g_clear_object (&session_vnc->clipboard_vnc);
+   g_clear_pointer (&session_vnc->rfb_screen->frameBuffer, g_free);
+diff --git a/src/grd-throttler.c b/src/grd-throttler.c
+index f1ec37d1..652cbf6b 100644
+--- a/src/grd-throttler.c
++++ b/src/grd-throttler.c
+@@ -153,19 +153,32 @@ grd_throttler_deny_connection (GrdThrottler      *throttler,
+   g_io_stream_close (G_IO_STREAM (connection), NULL, NULL);
+ }
+ 
++typedef struct _ConnectionData
++{
++  GrdThrottler *throttler;
++  char *peer_name;
++  GSocketConnection *connection;
++} ConnectionData;
++
+ static void
+-on_connection_closed_changed (GSocketConnection *connection,
+-                              GParamSpec        *pspec,
+-                              GrdThrottler      *throttler)
++connection_data_free (ConnectionData *connection_data)
+ {
+-  const char *peer_name;
++  GrdThrottler *throttler;
+   GrdPeer *peer;
+ 
+-  g_assert (g_io_stream_is_closed (G_IO_STREAM (connection)));
++  throttler = connection_data->throttler;
++  if (throttler)
++    {
++      g_clear_weak_pointer (&connection_data->throttler);
++
++      peer = g_hash_table_lookup (throttler->peers, connection_data->peer_name);
++      grd_throttler_unregister_connection (throttler,
++                                           connection_data->connection,
++                                           peer);
++    }
+ 
+-  peer_name = g_object_get_qdata (G_OBJECT (connection), quark_remote_address);
+-  peer = g_hash_table_lookup (throttler->peers, peer_name);
+-  grd_throttler_unregister_connection (throttler, connection, peer);
++  g_free (connection_data->peer_name);
++  g_free (connection_data);
+ }
+ 
+ static void
+@@ -173,17 +186,23 @@ grd_throttler_allow_connection (GrdThrottler      *throttler,
+                                 GSocketConnection *connection,
+                                 GrdPeer           *peer)
+ {
++  ConnectionData *connection_data;
++
+   g_debug ("[Throttler] Accepting connection from %s", peer->name);
+ 
++  connection_data = g_new0 (ConnectionData, 1);
++  g_set_weak_pointer (&connection_data->throttler, throttler);
++  connection_data->connection = connection;
++  connection_data->peer_name = g_strdup (peer->name);
++
+   throttler->allow_callback (throttler, connection, throttler->user_data);
+ 
+   peer->last_accept_us = g_get_monotonic_time ();
+ 
+   g_object_set_qdata_full (G_OBJECT (connection), quark_remote_address,
+-                           g_strdup (peer->name), g_free);
++                           connection_data,
++                           (GDestroyNotify) connection_data_free);
+   grd_throttler_register_connection (throttler, peer);
+-  g_signal_connect (connection, "notify::closed",
+-                    G_CALLBACK (on_connection_closed_changed), throttler);
+ }
+ 
+ static gboolean
+diff --git a/src/grd-utils.c b/src/grd-utils.c
+index 772d6fc4..73f927fd 100644
+--- a/src/grd-utils.c
++++ b/src/grd-utils.c
+@@ -24,9 +24,3 @@
+ 
+ #include "grd-utils.h"
+ 
+-void
+-grd_close_connection_and_notify (GSocketConnection *connection)
+-{
+-  g_io_stream_close (G_IO_STREAM (connection), NULL, NULL);
+-  g_object_notify (G_OBJECT (connection), "closed");
+-}
+diff --git a/src/grd-utils.h b/src/grd-utils.h
+index 6fb81717..9fdb020a 100644
+--- a/src/grd-utils.h
++++ b/src/grd-utils.h
+@@ -23,8 +23,6 @@
+ #include <gio/gio.h>
+ #include <stdint.h>
+ 
+-void grd_close_connection_and_notify (GSocketConnection *connection);
+-
+ static inline int64_t
+ us (int64_t us)
+ {
+-- 
+2.31.1
+
+
+From 2233c94253ca673225bf0622fff3b1c87b4acadd Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Tue, 29 Sep 2026 16:51:52 +0200
+Subject: [PATCH 03/13] session: Add 'starting' signal
+
+This will be used to emit a signal before a session is started, after a
+connection is authenticated.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/436>
+(cherry picked from commit 2b807428399077ee8ac580a577582bbec27f63d1)
+(cherry picked from commit 03d3f76a3df210f694e951129a540266854f273d)
+(cherry picked from commit 5644771764eb00ad1740387166c8aad16dd93efb)
+---
+ src/grd-session.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/grd-session.c b/src/grd-session.c
+index de3fff29..430c15c3 100644
+--- a/src/grd-session.c
++++ b/src/grd-session.c
+@@ -45,6 +45,7 @@ enum
+ 
+ enum
+ {
++  STARTING,
+   STOPPED,
+ 
+   LAST_SIGNAL
+@@ -842,6 +843,8 @@ grd_session_start (GrdSession *session)
+   GrdSessionPrivate *priv = grd_session_get_instance_private (session);
+   GrdDBusRemoteDesktop *remote_desktop_proxy;
+ 
++  g_signal_emit (session, signals[STARTING], 0);
++
+   priv->cancellable = g_cancellable_new ();
+ 
+   remote_desktop_proxy = grd_context_get_remote_desktop_proxy (priv->context);
+@@ -941,6 +944,12 @@ grd_session_class_init (GrdSessionClass *klass)
+                                                         G_PARAM_CONSTRUCT_ONLY |
+                                                         G_PARAM_STATIC_STRINGS));
+ 
++  signals[STARTING] = g_signal_new ("starting",
++                                    G_TYPE_FROM_CLASS (klass),
++                                    G_SIGNAL_RUN_LAST,
++                                    0,
++                                    NULL, NULL, NULL,
++                                    G_TYPE_NONE, 0);
+   signals[STOPPED] = g_signal_new ("stopped",
+                                    G_TYPE_FROM_CLASS (klass),
+                                    G_SIGNAL_RUN_LAST,
+-- 
+2.31.1
+
+
+From 8be18c8a60ad1a8c01328ebbddf16c5964f74596 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Thu, 30 Oct 2025 00:20:33 +0100
+Subject: [PATCH 04/13] session/rdp: Add back pointer to server instance
+
+This will allow getting e.g. hw accel instances from the server without
+having to pass them around everywhere.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/351>
+(cherry picked from commit 13088e28f9938d4e843d0e54992b5925218b28f6)
+(cherry picked from commit b99e1a3f5d2404f31c19d8958f79af9ebbdadcfa)
+---
+ src/grd-session-rdp.c | 8 ++++++++
+ src/grd-session-rdp.h | 2 ++
+ 2 files changed, 10 insertions(+)
+
+diff --git a/src/grd-session-rdp.c b/src/grd-session-rdp.c
+index 5b59eb9b..0108a386 100644
+--- a/src/grd-session-rdp.c
++++ b/src/grd-session-rdp.c
+@@ -77,6 +77,7 @@ struct _GrdSessionRdp
+ {
+   GrdSession parent;
+ 
++  GrdRdpServer *server;
+   GSocketConnection *connection;
+   freerdp_peer *peer;
+ 
+@@ -171,6 +172,12 @@ static gboolean
+ are_pointer_bitmaps_equal (gconstpointer a,
+                            gconstpointer b);
+ 
++GrdRdpServer *
++grd_session_rdp_get_server (GrdSessionRdp *session_rdp)
++{
++  return session_rdp->server;
++}
++
+ static gboolean
+ is_rdp_peer_flag_set (RdpPeerContext *rdp_peer_context,
+                       RdpPeerFlag     flag)
+@@ -1704,6 +1711,7 @@ grd_session_rdp_new (GrdRdpServer      *rdp_server,
+                               "context", context,
+                               NULL);
+ 
++  session_rdp->server = rdp_server;
+   session_rdp->connection = g_object_ref (connection);
+   session_rdp->start_event = CreateEvent (NULL, TRUE, FALSE, NULL);
+   session_rdp->stop_event = CreateEvent (NULL, TRUE, FALSE, NULL);
+diff --git a/src/grd-session-rdp.h b/src/grd-session-rdp.h
+index a855f50e..3b7e0970 100644
+--- a/src/grd-session-rdp.h
++++ b/src/grd-session-rdp.h
+@@ -54,4 +54,6 @@ void grd_session_rdp_update_pointer (GrdSessionRdp *session_rdp,
+ 
+ void grd_session_rdp_hide_pointer (GrdSessionRdp *session_rdp);
+ 
++GrdRdpServer *grd_session_rdp_get_server (GrdSessionRdp *session_rdp);
++
+ #endif /* GRD_SESSION_RDP_H */
+-- 
+2.31.1
+
+
+From b5a13a99189bcbe1aacfc7fc89956235ea5931de Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Tue, 29 Sep 2026 16:50:02 +0200
+Subject: [PATCH 05/13] throttler: Keep track of active connections
+
+We only counted them; lets keep track of each one to do allow us to do
+some state tracking in the future.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/436>
+(cherry picked from commit 4bdc3dc775e4b8efb17a8d84c4a44f1d5a77501c)
+(cherry picked from commit 4dd8ed6e2182e549eef390e39c85708318f6366b)
+(cherry picked from commit aa4e6241536deabf3158a4fb0ef71ff478714cde)
+---
+ src/grd-throttler.c | 23 +++++++++++++----------
+ 1 file changed, 13 insertions(+), 10 deletions(-)
+
+diff --git a/src/grd-throttler.c b/src/grd-throttler.c
+index 652cbf6b..bbd1a661 100644
+--- a/src/grd-throttler.c
++++ b/src/grd-throttler.c
+@@ -43,7 +43,7 @@ typedef struct _GrdPeer
+ {
+   GrdThrottler *throttler;
+   char *name;
+-  int active_connections;
++  GPtrArray *active_connections;
+   GArray *connect_timestamps;
+   GQueue *delayed_connections;
+   int64_t last_accept_us;
+@@ -96,7 +96,7 @@ maybe_dispose_peer (GrdThrottler   *throttler,
+                     GrdPeer        *peer,
+                     GHashTableIter *iter)
+ {
+-  if (peer->active_connections > 0)
++  if (peer->active_connections->len > 0)
+     return;
+ 
+   if (peer->connect_timestamps && peer->connect_timestamps->len > 0)
+@@ -112,12 +112,13 @@ maybe_dispose_peer (GrdThrottler   *throttler,
+ }
+ 
+ static void
+-grd_throttler_register_connection (GrdThrottler *throttler,
+-                                   GrdPeer      *peer)
++grd_throttler_register_connection (GrdThrottler      *throttler,
++                                   GrdPeer           *peer,
++                                   GSocketConnection *connection)
+ {
+   int64_t now_us;
+ 
+-  peer->active_connections++;
++  g_ptr_array_add (peer->active_connections, connection);
+   throttler->active_connections++;
+ 
+   if (!peer->connect_timestamps)
+@@ -134,10 +135,10 @@ grd_throttler_unregister_connection (GrdThrottler      *throttler,
+                                      GSocketConnection *connection,
+                                      GrdPeer           *peer)
+ {
+-  g_return_if_fail (peer->active_connections > 0);
+-  g_return_if_fail (throttler->active_connections > 0);
++  g_assert (g_ptr_array_find (peer->active_connections, connection, NULL));
++  g_assert (throttler->active_connections > 0);
+ 
+-  peer->active_connections--;
++  g_ptr_array_remove (peer->active_connections, connection);
+   throttler->active_connections--;
+ 
+   maybe_dispose_peer (throttler, peer, NULL);
+@@ -202,7 +203,7 @@ grd_throttler_allow_connection (GrdThrottler      *throttler,
+   g_object_set_qdata_full (G_OBJECT (connection), quark_remote_address,
+                            connection_data,
+                            (GDestroyNotify) connection_data_free);
+-  grd_throttler_register_connection (throttler, peer);
++  grd_throttler_register_connection (throttler, peer, connection);
+ }
+ 
+ static gboolean
+@@ -247,7 +248,7 @@ is_connection_limit_reached (GrdThrottler *throttler,
+ {
+   GrdThrottlerLimits *limits = throttler->limits;
+ 
+-  if (peer->active_connections >= limits->max_connections_per_peer)
++  if (peer->active_connections->len >= limits->max_connections_per_peer)
+     return TRUE;
+ 
+   if (throttler->active_connections >= limits->max_global_connections)
+@@ -401,6 +402,7 @@ ensure_peer (GrdThrottler *throttler,
+   peer->throttler = throttler;
+   peer->name = g_strdup (peer_name);
+   peer->delayed_connections = g_queue_new ();
++  peer->active_connections = g_ptr_array_new ();
+ 
+   g_hash_table_insert (throttler->peers,
+                        g_strdup (peer_name), peer);
+@@ -494,6 +496,7 @@ grd_peer_free (GrdPeer *peer)
+ {
+   if (peer->delayed_connections)
+     g_queue_free_full (peer->delayed_connections, g_object_unref);
++  g_clear_pointer (&peer->active_connections, g_ptr_array_unref);
+   g_clear_pointer (&peer->connect_timestamps, g_array_unref);
+   g_clear_pointer (&peer->name, g_free);
+   g_free (peer);
+-- 
+2.31.1
+
+
+From 5f315eb89719865476b44a5de1f131d0e503a87c Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Tue, 29 Sep 2026 16:50:47 +0200
+Subject: [PATCH 06/13] throttler: Rename connection data quark
+
+It was named to be specific about peer names, and also unused, but lets
+name it and prepare it to be used again.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/436>
+(cherry picked from commit 04dd15938e97acd7f7e98040fda32f1839df645d)
+(cherry picked from commit a208af3219919f39d07bd74964712e23c94e76ae)
+(cherry picked from commit c30c291891e42778d6ebbc2cdd41cd29c52877c5)
+---
+ src/grd-throttler.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/grd-throttler.c b/src/grd-throttler.c
+index bbd1a661..fd1a33dc 100644
+--- a/src/grd-throttler.c
++++ b/src/grd-throttler.c
+@@ -67,7 +67,7 @@ struct _GrdThrottler
+ 
+ G_DEFINE_TYPE (GrdThrottler, grd_throttler, G_TYPE_OBJECT)
+ 
+-static GQuark quark_remote_address;
++static GQuark quark_connection_data;
+ 
+ static void
+ maybe_queue_timeout (GrdThrottler *throttler);
+@@ -200,7 +200,7 @@ grd_throttler_allow_connection (GrdThrottler      *throttler,
+ 
+   peer->last_accept_us = g_get_monotonic_time ();
+ 
+-  g_object_set_qdata_full (G_OBJECT (connection), quark_remote_address,
++  g_object_set_qdata_full (G_OBJECT (connection), quark_connection_data,
+                            connection_data,
+                            (GDestroyNotify) connection_data_free);
+   grd_throttler_register_connection (throttler, peer, connection);
+@@ -529,6 +529,6 @@ grd_throttler_class_init (GrdThrottlerClass *klass)
+ 
+   object_class->finalize = grd_throttler_finalize;
+ 
+-  quark_remote_address =
+-    g_quark_from_static_string ("grd-remote-address-string");
++  quark_connection_data =
++    g_quark_from_static_string ("grd-throttler-connection-data");
+ }
+-- 
+2.31.1
+
+
+From 49d95f16b0843302317f66fbad30e31055e01681 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Tue, 29 Sep 2026 22:29:02 +0200
+Subject: [PATCH 07/13] throttler: Replace global counter with function
+
+The throttler instance has a list of peers, and each peer a list of
+connections, so we already have a way to derive the count.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/436>
+(cherry picked from commit 72c634cc92b2e7cadf1a847c0c56a7861c3ea177)
+(cherry picked from commit 2aa4b9b967eb0ad427054dba835caa34b742561c)
+(cherry picked from commit a8cfd92ed467dd226568522cf46c49e83b9138de)
+---
+ src/grd-throttler.c | 25 +++++++++++++++++++------
+ 1 file changed, 19 insertions(+), 6 deletions(-)
+
+diff --git a/src/grd-throttler.c b/src/grd-throttler.c
+index fd1a33dc..78116bd9 100644
+--- a/src/grd-throttler.c
++++ b/src/grd-throttler.c
+@@ -55,8 +55,6 @@ struct _GrdThrottler
+ 
+   GrdThrottlerLimits *limits;
+ 
+-  int active_connections;
+-
+   GrdThrottlerAllowCallback allow_callback;
+   gpointer user_data;
+ 
+@@ -119,7 +117,6 @@ grd_throttler_register_connection (GrdThrottler      *throttler,
+   int64_t now_us;
+ 
+   g_ptr_array_add (peer->active_connections, connection);
+-  throttler->active_connections++;
+ 
+   if (!peer->connect_timestamps)
+     peer->connect_timestamps = g_array_new (FALSE, FALSE, sizeof (int64_t));
+@@ -136,10 +133,8 @@ grd_throttler_unregister_connection (GrdThrottler      *throttler,
+                                      GrdPeer           *peer)
+ {
+   g_assert (g_ptr_array_find (peer->active_connections, connection, NULL));
+-  g_assert (throttler->active_connections > 0);
+ 
+   g_ptr_array_remove (peer->active_connections, connection);
+-  throttler->active_connections--;
+ 
+   maybe_dispose_peer (throttler, peer, NULL);
+   maybe_queue_timeout (throttler);
+@@ -242,6 +237,24 @@ prune_closed_connections (GQueue *queue)
+     }
+ }
+ 
++static int
++count_active_connections (GrdThrottler *throttler)
++{
++  GHashTableIter iter;
++  gpointer key, value;
++  int count = 0;
++
++  g_hash_table_iter_init (&iter, throttler->peers);
++  while (g_hash_table_iter_next (&iter, &key, &value))
++    {
++      GrdPeer *peer = value;
++
++      count += peer->active_connections->len;
++    }
++
++  return count;
++}
++
+ static gboolean
+ is_connection_limit_reached (GrdThrottler *throttler,
+                              GrdPeer      *peer)
+@@ -251,7 +264,7 @@ is_connection_limit_reached (GrdThrottler *throttler,
+   if (peer->active_connections->len >= limits->max_connections_per_peer)
+     return TRUE;
+ 
+-  if (throttler->active_connections >= limits->max_global_connections)
++  if (count_active_connections (throttler) >= limits->max_global_connections)
+     return TRUE;
+ 
+   return FALSE;
+-- 
+2.31.1
+
+
+From 76d15831c83444ba037e60d9c1a3db14a2ba76cf Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Wed, 30 Sep 2026 00:46:49 +0200
+Subject: [PATCH 08/13] throttler: Bump global pending connection limit to 1000
+
+Before we had 5 as the limit per peer, and 10 global. That meant 2 peers
+could easily cause any other peer to fail to connect. Change the limit
+to 1000, meaning one need at least 200.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/436>
+(cherry picked from commit cf336009550240b369df99c165540f2fa46494fe)
+(cherry picked from commit 8e1f467f8aa18b7ad8aead286956a5081239e0d1)
+(cherry picked from commit 4bd1ed82f0d212eb4e559b1e3eb70cd21463cb54)
+---
+ src/grd-throttler.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/grd-throttler.c b/src/grd-throttler.c
+index 78116bd9..f6e470a7 100644
+--- a/src/grd-throttler.c
++++ b/src/grd-throttler.c
+@@ -27,7 +27,7 @@
+ 
+ #define DEFAULT_MAX_CONNECTIONS_PER_PEER 5
+ #define DEFAULT_MAX_PENDING_CONNECTIONS 5
+-#define DEFAULT_MAX_ATTEMPTS_PER_SECOND 10
++#define DEFAULT_MAX_ATTEMPTS_PER_SECOND 1000
+ 
+ struct _GrdThrottlerLimits
+ {
+-- 
+2.31.1
+
+
+From a0ab5d38e15bf23bd42925ed09cf06e48097bf43 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Wed, 30 Sep 2026 21:45:03 +0200
+Subject: [PATCH 09/13] session/rdp: Actively shut down reading of the socket
+ when stopping
+
+If we don't call shutdown() on the socket file descriptor shutting down
+reading, we might not return any current recv() call in the socket
+thread until the remote peer disconnects from its end, so make sure we
+stop reading when stopping the session.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/436>
+(cherry picked from commit d9f45019fc584a0f76c1ef26d76dc01aa0c318dc)
+(cherry picked from commit 739453dcabba7892fc2ac974900d3bdc2b5fc8b7)
+(cherry picked from commit 6b6a94f2413b81d8ef855a209f11e71652e1f9bf)
+---
+ src/grd-session-rdp.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/grd-session-rdp.c b/src/grd-session-rdp.c
+index 0108a386..53761228 100644
+--- a/src/grd-session-rdp.c
++++ b/src/grd-session-rdp.c
+@@ -1774,6 +1774,8 @@ grd_session_rdp_stop (GrdSession *session)
+ 
+   g_clear_object (&rdp_peer_context->clipboard_rdp);
+ 
++  g_socket_shutdown (g_socket_connection_get_socket (session_rdp->connection),
++                     TRUE, FALSE, NULL);
+   peer->Close (peer);
+   g_clear_pointer (&session_rdp->socket_thread, g_thread_join);
+   g_clear_object (&session_rdp->connection);
+-- 
+2.31.1
+
+
+From ec9e8f34f0f2c2f67d9d581a3faf615f50bee2f2 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Wed, 30 Sep 2026 23:35:46 +0200
+Subject: [PATCH 10/13] session/vnc: Add server back pointer
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/436>
+(cherry picked from commit 71502c97db828ff28bde5925d427db45b22bfff4)
+(cherry picked from commit d27eda9a91f4078ee1f08b7664ae71f2b6e817cf)
+(cherry picked from commit d34eec6002b35bab03a9e874703374e536024d8b)
+---
+ src/grd-session-vnc.c | 18 ++++++++++--------
+ src/grd-session-vnc.h |  2 +-
+ src/grd-vnc-tls.c     |  2 +-
+ 3 files changed, 12 insertions(+), 10 deletions(-)
+
+diff --git a/src/grd-session-vnc.c b/src/grd-session-vnc.c
+index 00bbbd6e..96fb0b33 100644
+--- a/src/grd-session-vnc.c
++++ b/src/grd-session-vnc.c
+@@ -56,7 +56,8 @@ struct _GrdSessionVnc
+ {
+   GrdSession parent;
+ 
+-  GrdVncServer *vnc_server;
++  GrdVncServer *server;
++
+   GSocketConnection *connection;
+ 
+   GList *socket_grabs;
+@@ -562,18 +563,19 @@ grd_session_vnc_get_stride_for_width (GrdSessionVnc *session_vnc,
+                                       int            width)
+ {
+   return width * BGRX_BYTES_PER_PIXEL;
++
+ }
+ 
+-rfbClientPtr
+-grd_session_vnc_get_rfb_client (GrdSessionVnc *session_vnc)
++GrdVncServer *
++grd_session_vnc_get_server (GrdSessionVnc *session_vnc)
+ {
+-  return session_vnc->rfb_client;
++  return session_vnc->server;
+ }
+ 
+-GrdVncServer *
+-grd_session_vnc_get_vnc_server (GrdSessionVnc *session_vnc)
++rfbClientPtr
++grd_session_vnc_get_rfb_client (GrdSessionVnc *session_vnc)
+ {
+-  return session_vnc->vnc_server;
++  return session_vnc->rfb_client;
+ }
+ 
+ static void
+@@ -777,7 +779,7 @@ grd_session_vnc_new (GrdVncServer      *vnc_server,
+                               "context", context,
+                               NULL);
+ 
+-  session_vnc->vnc_server = vnc_server;
++  session_vnc->server = vnc_server;
+   session_vnc->connection = g_object_ref (connection);
+ 
+   grd_session_vnc_grab_socket (session_vnc, vnc_socket_grab_func);
+diff --git a/src/grd-session-vnc.h b/src/grd-session-vnc.h
+index efc00384..2567629b 100644
+--- a/src/grd-session-vnc.h
++++ b/src/grd-session-vnc.h
+@@ -83,6 +83,6 @@ gboolean grd_session_vnc_is_paused (GrdSessionVnc *session_vnc);
+ 
+ void grd_session_vnc_dispatch (GrdSessionVnc *session_vnc);
+ 
+-GrdVncServer * grd_session_vnc_get_vnc_server (GrdSessionVnc *session_vnc);
++GrdVncServer * grd_session_vnc_get_server (GrdSessionVnc *session_vnc);
+ 
+ #endif /* GRD_SESSION_VNC_H */
+diff --git a/src/grd-vnc-tls.c b/src/grd-vnc-tls.c
+index b1d7c020..4b34eb62 100644
+--- a/src/grd-vnc-tls.c
++++ b/src/grd-vnc-tls.c
+@@ -489,7 +489,7 @@ rfb_tls_security_handler (rfbClientPtr rfb_client)
+   tls_session = grd_vnc_tls_session_from_vnc_session (session_vnc);
+   if (!tls_session)
+     {
+-      GrdVncServer *vnc_server = grd_session_vnc_get_vnc_server (session_vnc);
++      GrdVncServer *vnc_server = grd_session_vnc_get_server (session_vnc);
+ 
+       tls_session = g_new0 (GrdVncTlsSession, 1);
+       tls_session->fd = grd_session_vnc_get_fd (session_vnc);
+-- 
+2.31.1
+
+
+From 49ec069dc8e8b409ab81b5d63bcfaac59b73183e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Wed, 30 Sep 2026 23:36:16 +0200
+Subject: [PATCH 11/13] session/vnc: Add getter for the socket connection
+
+This will be used for tracking sessions from connections in a later
+commit.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/436>
+(cherry picked from commit a66d55a5d85f591b2acf83d65c011d4c0a45a172)
+(cherry picked from commit 9291a3b9cba4be4bd58c1ed4eeba7181fc9cee9a)
+(cherry picked from commit a210aac1358dca3f6db12aab80bf702efcc0ecae)
+---
+ src/grd-session-vnc.c | 6 ++++++
+ src/grd-session-vnc.h | 2 ++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/src/grd-session-vnc.c b/src/grd-session-vnc.c
+index 96fb0b33..6980bcb9 100644
+--- a/src/grd-session-vnc.c
++++ b/src/grd-session-vnc.c
+@@ -578,6 +578,12 @@ grd_session_vnc_get_rfb_client (GrdSessionVnc *session_vnc)
+   return session_vnc->rfb_client;
+ }
+ 
++GSocketConnection *
++grd_session_vnc_get_socket_connection (GrdSessionVnc *session_vnc)
++{
++  return session_vnc->connection;
++}
++
+ static void
+ init_vnc_session (GrdSessionVnc *session_vnc)
+ {
+diff --git a/src/grd-session-vnc.h b/src/grd-session-vnc.h
+index 2567629b..fa009f7b 100644
+--- a/src/grd-session-vnc.h
++++ b/src/grd-session-vnc.h
+@@ -85,4 +85,6 @@ void grd_session_vnc_dispatch (GrdSessionVnc *session_vnc);
+ 
+ GrdVncServer * grd_session_vnc_get_server (GrdSessionVnc *session_vnc);
+ 
++GSocketConnection * grd_session_vnc_get_socket_connection (GrdSessionVnc *session_vnc);
++
+ #endif /* GRD_SESSION_VNC_H */
+-- 
+2.31.1
+
+
+From e74e4e17a796a7b6946adfa512d287b71ff1a804 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Wed, 30 Sep 2026 23:37:43 +0200
+Subject: [PATCH 12/13] vnc-server: Track sessions in a hash table
+
+Just like for the RDP server, is the key the socket connection for the
+client connection, and the value is the session. The key (connection) is
+owned by the session, and the session is effectively owned by the hash
+table.
+
+When a session has stopped itself (e.g. client disconnect), we notify
+the server about it, and it will move the session to a to-close list
+freed in an idle callback, just as before. When stopping a session for
+some other reason (e.g. tear down), we instead disconnect the signal
+handlers, and handle the freeing without any idle callback. This is done
+so that we can rely on removing a hash table entry to both stop and free
+a session.
+
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/436>
+(cherry picked from commit b3ff0f961a57727182214fccc46188192e1e367f)
+(cherry picked from commit dc69b9dd6cce966cf247d9f722f7525ddc88c863)
+(cherry picked from commit 54031cd04110e874966492297615cb822a1ffea7)
+---
+ src/grd-session-vnc.c |  4 +++-
+ src/grd-vnc-server.c  | 54 +++++++++++++++++++++++++++++--------------
+ 2 files changed, 40 insertions(+), 18 deletions(-)
+
+diff --git a/src/grd-session-vnc.c b/src/grd-session-vnc.c
+index 6980bcb9..16c199d6 100644
+--- a/src/grd-session-vnc.c
++++ b/src/grd-session-vnc.c
+@@ -807,6 +807,7 @@ grd_session_vnc_dispose (GObject *object)
+   g_clear_pointer (&session_vnc->socket_grabs, g_list_free);
+ 
+   g_clear_pointer (&session_vnc->pressed_keys, g_hash_table_unref);
++  g_clear_object (&session_vnc->connection);
+ 
+   G_OBJECT_CLASS (grd_session_vnc_parent_class)->dispose (object);
+ }
+@@ -822,7 +823,8 @@ grd_session_vnc_stop (GrdSession *session)
+ 
+   grd_session_vnc_pause (session_vnc);
+ 
+-  g_clear_object (&session_vnc->connection);
++  g_io_stream_close (G_IO_STREAM (session_vnc->connection), NULL, NULL);
++
+   g_clear_object (&session_vnc->clipboard_vnc);
+   g_clear_pointer (&session_vnc->rfb_screen->frameBuffer, g_free);
+   g_clear_pointer (&session_vnc->rfb_screen, rfbScreenCleanup);
+diff --git a/src/grd-vnc-server.c b/src/grd-vnc-server.c
+index c307f9c5..dfb2017a 100644
+--- a/src/grd-vnc-server.c
++++ b/src/grd-vnc-server.c
+@@ -48,7 +48,7 @@ struct _GrdVncServer
+ 
+   GrdThrottler *throttler;
+ 
+-  GList *sessions;
++  GHashTable *sessions;
+ 
+   GList *stopped_sessions;
+   guint idle_task;
+@@ -100,11 +100,18 @@ cleanup_stopped_sessions_idle (GrdVncServer *vnc_server)
+ static void
+ on_session_stopped (GrdSession *session, GrdVncServer *vnc_server)
+ {
++  GSocketConnection *connection;
++  gboolean stole;
++
+   g_debug ("VNC session stopped");
+ 
+   vnc_server->stopped_sessions = g_list_append (vnc_server->stopped_sessions,
+                                                 session);
+-  vnc_server->sessions = g_list_remove (vnc_server->sessions, session);
++
++  connection = grd_session_vnc_get_socket_connection (GRD_SESSION_VNC (session));
++  stole = g_hash_table_steal (vnc_server->sessions, connection);
++  g_assert (stole);
++
+   if (!vnc_server->idle_task)
+     {
+       vnc_server->idle_task =
+@@ -121,7 +128,7 @@ allow_connection_cb (GrdThrottler      *throttler,
+   GrdVncServer *vnc_server = GRD_VNC_SERVER (user_data);
+   GrdSessionVnc *session_vnc;
+ 
+-  if (vnc_server->sessions)
++  if (g_hash_table_size (vnc_server->sessions) >= 1)
+     {
+       /* TODO: Add the rfbScreen instance to GrdVncServer to support multiple
+        * sessions. */
+@@ -132,7 +139,7 @@ allow_connection_cb (GrdThrottler      *throttler,
+   g_debug ("Creating new VNC session");
+ 
+   session_vnc = grd_session_vnc_new (vnc_server, connection);
+-  vnc_server->sessions = g_list_append (vnc_server->sessions, session_vnc);
++  g_hash_table_insert (vnc_server->sessions, connection, session_vnc);
+   grd_context_add_session (vnc_server->context, GRD_SESSION (session_vnc));
+ 
+   g_signal_connect (session_vnc, "stopped",
+@@ -205,13 +212,6 @@ grd_vnc_server_start (GrdVncServer  *vnc_server,
+   return TRUE;
+ }
+ 
+-static void
+-stop_and_unref_session (GrdSession *session)
+-{
+-  grd_session_stop (session);
+-  g_object_unref (session);
+-}
+-
+ static void
+ grd_vnc_server_set_property (GObject      *object,
+                              guint         prop_id,
+@@ -264,18 +264,34 @@ grd_vnc_server_dispose (GObject *object)
+     {
+       grd_vnc_server_cleanup_stopped_sessions (vnc_server);
+     }
+-  if (vnc_server->sessions)
+-    {
+-      g_list_free_full (vnc_server->sessions,
+-                        (GDestroyNotify) stop_and_unref_session);
+-      vnc_server->sessions = NULL;
+-    }
++  g_clear_pointer (&vnc_server->sessions, g_hash_table_unref);
+ 
+   g_clear_object (&vnc_server->throttler);
+ 
+   G_OBJECT_CLASS (grd_vnc_server_parent_class)->dispose (object);
+ }
+ 
++static void
++grd_vnc_server_finalize (GObject *object)
++{
++  GrdVncServer *vnc_server = GRD_VNC_SERVER (object);
++
++  g_clear_pointer (&vnc_server->sessions, g_hash_table_unref);
++
++  G_OBJECT_CLASS (grd_vnc_server_parent_class)->finalize (object);
++}
++
++static void
++stop_session (gpointer user_data)
++{
++  GrdSessionVnc *session_vnc = GRD_SESSION_VNC (user_data);
++  GrdVncServer *vnc_server = grd_session_vnc_get_server (session_vnc);
++
++  g_signal_handlers_disconnect_by_data (session_vnc, vnc_server);
++  grd_session_stop (GRD_SESSION (session_vnc));
++  g_object_unref (session_vnc);
++}
++
+ static void
+ grd_vnc_server_constructed (GObject *object)
+ {
+@@ -293,6 +309,9 @@ grd_vnc_server_constructed (GObject *object)
+                     vnc_server);
+   sync_encryption_settings (vnc_server);
+ 
++  vnc_server->sessions = g_hash_table_new_full (NULL, NULL,
++                                                NULL, stop_session);
++
+   limits = grd_throttler_limits_new (vnc_server->context);
+   /* TODO: Add the rfbScreen instance to GrdVncServer to support multiple
+    * sessions. */
+@@ -317,6 +336,7 @@ grd_vnc_server_class_init (GrdVncServerClass *klass)
+   object_class->set_property = grd_vnc_server_set_property;
+   object_class->get_property = grd_vnc_server_get_property;
+   object_class->dispose = grd_vnc_server_dispose;
++  object_class->finalize = grd_vnc_server_finalize;
+   object_class->constructed = grd_vnc_server_constructed;
+ 
+   g_object_class_install_property (object_class,
+-- 
+2.31.1
+
+
+From 55afe3e28d20ce6639d519fdb38e7994e619a457 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jonas=20=C3=85dahl?= <jadahl@gmail.com>
+Date: Wed, 30 Sep 2026 23:51:17 +0200
+Subject: [PATCH 13/13] throttler: Introduce authentication timeout
+
+If a connection that got allowed through by the throttler isn't marked
+as 'authenticated' by the throttler owner (i.e. VNC/RDP server), then
+the session and connection is closed.
+
+The timeout is currently set to 30 seconds.
+
+CVE: CVE-2026-96541
+Closes: https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/issues/356
+Part-of: <https://gitlab.gnome.org/GNOME/gnome-remote-desktop/-/merge_requests/436>
+(cherry picked from commit 9b4f5e370eb8a833b7e1f4c2a873681c625e4673)
+(cherry picked from commit fbcd252ab86f77a1d74463f47aa1de8799ec9b85)
+(cherry picked from commit 48a79f3ca9d577da2b2968601c6cc44d3144ffa2)
+---
+ src/grd-throttler.c  | 146 +++++++++++++++++++++++++++++++++++++++++++
+ src/grd-throttler.h  |   4 ++
+ src/grd-vnc-server.c |  28 +++++++++
+ 3 files changed, 178 insertions(+)
+
+diff --git a/src/grd-throttler.c b/src/grd-throttler.c
+index f6e470a7..646da4c1 100644
+--- a/src/grd-throttler.c
++++ b/src/grd-throttler.c
+@@ -29,6 +29,17 @@
+ #define DEFAULT_MAX_PENDING_CONNECTIONS 5
+ #define DEFAULT_MAX_ATTEMPTS_PER_SECOND 1000
+ 
++#define AUTHENTICATE_TIMEOUT_US s2us (30)
++
++enum
++{
++  CONNECTION_TIMED_OUT,
++
++  N_SIGNALS
++};
++
++static guint signals[N_SIGNALS];
++
+ struct _GrdThrottlerLimits
+ {
+   int max_global_connections;
+@@ -61,6 +72,7 @@ struct _GrdThrottler
+   GHashTable *peers;
+ 
+   GSource *delayed_connections_source;
++  GSource *auth_timeout_source;
+ };
+ 
+ G_DEFINE_TYPE (GrdThrottler, grd_throttler, G_TYPE_OBJECT)
+@@ -70,6 +82,14 @@ static GQuark quark_connection_data;
+ static void
+ maybe_queue_timeout (GrdThrottler *throttler);
+ 
++static void
++maybe_queue_auth_timeout (GrdThrottler *throttler);
++
++static void
++grd_throttler_unregister_connection (GrdThrottler      *throttler,
++                                     GSocketConnection *connection,
++                                     GrdPeer           *peer);
++
+ static void
+ prune_old_timestamps (GArray  *timestamps,
+                       int64_t  now_us)
+@@ -125,6 +145,8 @@ grd_throttler_register_connection (GrdThrottler      *throttler,
+ 
+   prune_old_timestamps (peer->connect_timestamps, now_us);
+   g_array_append_val (peer->connect_timestamps, now_us);
++
++  maybe_queue_auth_timeout (throttler);
+ }
+ 
+ static void
+@@ -153,7 +175,9 @@ typedef struct _ConnectionData
+ {
+   GrdThrottler *throttler;
+   char *peer_name;
++  int64_t connect_time_us;
+   GSocketConnection *connection;
++  gboolean is_authenticated;
+ } ConnectionData;
+ 
+ static void
+@@ -190,6 +214,7 @@ grd_throttler_allow_connection (GrdThrottler      *throttler,
+   g_set_weak_pointer (&connection_data->throttler, throttler);
+   connection_data->connection = connection;
+   connection_data->peer_name = g_strdup (peer->name);
++  connection_data->connect_time_us = g_get_monotonic_time ();
+ 
+   throttler->allow_callback (throttler, connection, throttler->user_data);
+ 
+@@ -464,6 +489,118 @@ grd_throttler_handle_connection (GrdThrottler      *throttler,
+   maybe_delay_connection (throttler, connection, peer, now_us);
+ }
+ 
++static gboolean
++dispatch_auth_timeout (gpointer user_data)
++{
++  GrdThrottler *throttler = GRD_THROTTLER (user_data);
++  GHashTableIter iter;
++  gpointer key, value;
++  int64_t now_us;
++
++  now_us = g_get_monotonic_time ();
++
++  g_hash_table_iter_init (&iter, throttler->peers);
++  while (g_hash_table_iter_next (&iter, &key, &value))
++    {
++      GrdPeer *peer = value;
++      int i;
++
++      for (i = 0; i < peer->active_connections->len; i++)
++        {
++          GSocketConnection *connection =
++            g_ptr_array_index (peer->active_connections, i);
++          ConnectionData *connection_data;
++
++          connection_data = g_object_get_qdata (G_OBJECT (connection),
++                                                quark_connection_data);
++          if (connection_data->is_authenticated)
++            continue;
++
++          if (connection_data->connect_time_us + AUTHENTICATE_TIMEOUT_US <
++              now_us)
++            {
++              g_debug ("[Throttler] Connection from %s timeout out",
++                       peer->name);
++              g_signal_emit (throttler, signals[CONNECTION_TIMED_OUT], 0,
++                             connection);
++            }
++        }
++    }
++
++  maybe_queue_auth_timeout (throttler);
++
++  return G_SOURCE_CONTINUE;
++}
++
++static void
++ensure_auth_timeout_source (GrdThrottler *throttler)
++{
++  if (throttler->auth_timeout_source)
++    return;
++
++  throttler->auth_timeout_source = g_source_new (&source_funcs,
++                                                 sizeof (GSource));
++  g_source_set_callback (throttler->auth_timeout_source,
++                         dispatch_auth_timeout, throttler, NULL);
++  g_source_attach (throttler->auth_timeout_source, NULL);
++  g_source_unref (throttler->auth_timeout_source);
++}
++
++static void
++maybe_queue_auth_timeout (GrdThrottler *throttler)
++{
++  GHashTableIter iter;
++  gpointer key, value;
++  int64_t next_timeout_us = INT64_MAX;
++
++  g_hash_table_iter_init (&iter, throttler->peers);
++  while (g_hash_table_iter_next (&iter, &key, &value))
++    {
++      GrdPeer *peer = value;
++      int i;
++
++      for (i = 0; i < peer->active_connections->len; i++)
++        {
++          GSocketConnection *connection =
++            g_ptr_array_index (peer->active_connections, i);
++          ConnectionData *connection_data;
++
++          connection_data = g_object_get_qdata (G_OBJECT (connection),
++                                                quark_connection_data);
++          if (connection_data->is_authenticated)
++            continue;
++
++          next_timeout_us = MIN (next_timeout_us,
++                                 connection_data->connect_time_us +
++                                 AUTHENTICATE_TIMEOUT_US);
++        }
++    }
++
++  if (next_timeout_us == INT64_MAX)
++    next_timeout_us = -1;
++
++  if (next_timeout_us >= 0)
++    {
++      ensure_auth_timeout_source (throttler);
++      g_source_set_ready_time (throttler->auth_timeout_source,
++                               next_timeout_us);
++    }
++}
++
++void
++grd_throttler_notify_authenticated (GrdThrottler      *throttler,
++                                    GSocketConnection *connection)
++{
++  ConnectionData *connection_data;
++
++  connection_data = g_object_get_qdata (G_OBJECT (connection),
++                                        quark_connection_data);
++  g_assert (connection_data);
++  connection_data->is_authenticated = TRUE;
++
++  maybe_queue_auth_timeout (throttler);
++}
++
+ void
+ grd_throttler_limits_set_max_global_connections (GrdThrottlerLimits *limits,
+                                                  int                 limit)
+@@ -521,6 +658,7 @@ grd_throttler_finalize (GObject *object)
+   GrdThrottler *throttler = GRD_THROTTLER(object);
+ 
+   g_clear_pointer (&throttler->delayed_connections_source, g_source_destroy);
++  g_clear_pointer (&throttler->auth_timeout_source, g_source_destroy);
+   g_clear_pointer (&throttler->peers, g_hash_table_unref);
+   g_clear_pointer (&throttler->limits, g_free);
+ 
+@@ -542,6 +680,14 @@ grd_throttler_class_init (GrdThrottlerClass *klass)
+ 
+   object_class->finalize = grd_throttler_finalize;
+ 
++  signals[CONNECTION_TIMED_OUT] = g_signal_new ("connection-timed-out",
++                                                G_TYPE_FROM_CLASS (klass),
++                                                G_SIGNAL_RUN_LAST,
++                                                0,
++                                                NULL, NULL, NULL,
++                                                G_TYPE_NONE, 1,
++                                                G_TYPE_SOCKET_CONNECTION);
++
+   quark_connection_data =
+     g_quark_from_static_string ("grd-throttler-connection-data");
+ }
+diff --git a/src/grd-throttler.h b/src/grd-throttler.h
+index a9554202..94d95390 100644
+--- a/src/grd-throttler.h
++++ b/src/grd-throttler.h
+@@ -38,6 +38,10 @@ void
+ grd_throttler_handle_connection (GrdThrottler      *throttler,
+                                  GSocketConnection *connection);
+ 
++void
++grd_throttler_notify_authenticated (GrdThrottler      *throttler,
++                                    GSocketConnection *connection);
++
+ void
+ grd_throttler_limits_set_max_global_connections (GrdThrottlerLimits *limits,
+                                                  int                 limit);
+diff --git a/src/grd-vnc-server.c b/src/grd-vnc-server.c
+index dfb2017a..4f287c78 100644
+--- a/src/grd-vnc-server.c
++++ b/src/grd-vnc-server.c
+@@ -97,6 +97,17 @@ cleanup_stopped_sessions_idle (GrdVncServer *vnc_server)
+   return G_SOURCE_REMOVE;
+ }
+ 
++static void
++on_session_starting (GrdSession   *session,
++                     GrdVncServer *vnc_server)
++{
++  GrdSessionVnc *session_vnc = GRD_SESSION_VNC (session);
++  GSocketConnection *connection;
++
++  connection = grd_session_vnc_get_socket_connection (session_vnc);
++  grd_throttler_notify_authenticated (vnc_server->throttler, connection);
++}
++
+ static void
+ on_session_stopped (GrdSession *session, GrdVncServer *vnc_server)
+ {
+@@ -142,6 +153,9 @@ allow_connection_cb (GrdThrottler      *throttler,
+   g_hash_table_insert (vnc_server->sessions, connection, session_vnc);
+   grd_context_add_session (vnc_server->context, GRD_SESSION (session_vnc));
+ 
++  g_signal_connect (session_vnc, "starting",
++                    G_CALLBACK (on_session_starting),
++                    vnc_server);
+   g_signal_connect (session_vnc, "stopped",
+                     G_CALLBACK (on_session_stopped),
+                     vnc_server);
+@@ -281,6 +295,17 @@ grd_vnc_server_finalize (GObject *object)
+   G_OBJECT_CLASS (grd_vnc_server_parent_class)->finalize (object);
+ }
+ 
++static void
++on_connection_timed_out (GrdThrottler      *throttler,
++                         GSocketConnection *connection,
++                         GrdVncServer      *vnc_server)
++{
++  gboolean removed;
++
++  removed = g_hash_table_remove (vnc_server->sessions, connection);
++  g_assert (removed);
++}
++
+ static void
+ stop_session (gpointer user_data)
+ {
+@@ -319,6 +344,9 @@ grd_vnc_server_constructed (GObject *object)
+   vnc_server->throttler = grd_throttler_new (limits,
+                                              allow_connection_cb,
+                                              vnc_server);
++  g_signal_connect (vnc_server->throttler, "connection-timed-out",
++                    G_CALLBACK (on_connection_timed_out),
++                    vnc_server);
+ 
+   G_OBJECT_CLASS (grd_vnc_server_parent_class)->constructed (object);
+ }
+-- 
+2.31.1
+

@@ -15,7 +15,7 @@
 
 Name:           gnome-remote-desktop
 Version:        40.0
-Release:        11%{?dist}
+Release:        13%{?dist}
 Summary:        GNOME Remote Desktop screen share service
 
 License:        GPLv2+
@@ -32,6 +32,13 @@ Patch1:         0001-pipewire-stream-Don-t-leak-GSource-s.patch
 
 # Connection throttling (RHEL-92795)
 Patch2:         connection-throttling.patch
+
+# https://redhat.atlassian.net/browse/RHEL-283394 (CVE-2026-109832) & CVE-2026-109833
+Patch3: 0001-vnc-tls-Forward-EINTR-and-ECONTINUE-to-caller.patch
+Patch4: 0002-vnc-tls-Fix-reading-from-within-the-peek-buffer.patch
+
+# https://redhat.atlassian.net/browse/RHEL-282535 (CVE-2026-109832)
+Patch5: throttler-timeout.patch
 
 ### LibVNCServer patches
 ## TLS security type enablement patches
@@ -129,6 +136,9 @@ done
 %patch0 -p1
 %patch1 -p1
 %patch2 -p1
+%patch3 -p1
+%patch4 -p1
+%patch5 -p1
 
 
 %build
@@ -203,6 +213,14 @@ popd
 
 
 %changelog
+* Wed Oct 28 2026 Jonas Ådahl <jadahl@redhat.com> - 40.0-13
+- Backport throttler timeout
+  Resolves: RHEL-282535
+
+* Tue Oct 20 2026 Jonas Ådahl <jadahl@redhat.com> - 40.0-12
+- Backport security fixes
+  Resolves: RHEL-283394
+
 * Thu Jul 03 2025 Jonas Ådahl <jadahl@redhat.com> - 40.0-11
 - Backport connection throttling
   Resolves: RHEL-92795
