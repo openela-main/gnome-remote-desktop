@@ -20,7 +20,7 @@ index f3ef1efe..b1d7c020 100644
 +      memmove (tls_session->peek_buffer,
                 tls_session->peek_buffer + to_read,
                 tls_session->peek_buffer_len - to_read);
-+      tls_session->peek_buffer_len =- to_read;
++      tls_session->peek_buffer_len -= to_read;
        len_read = to_read;
        to_read = 0;
      }
