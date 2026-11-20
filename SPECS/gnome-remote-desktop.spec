@@ -2,7 +2,7 @@
 
 Name:           gnome-remote-desktop
 Version:        0.1.8
-Release:        4%{?dist}
+Release:        7%{?dist}
 Summary:        GNOME Remote Desktop screen share service
 
 License:        GPLv2+
@@ -25,6 +25,13 @@ Patch6:         cursor-only-frame-fixes.patch
 
 # Connection throttling (RHEL-92791)
 Patch7:         connection-throttling.patch
+
+# Security fixes (RHEL-282531, CVE-2026-109832) & CVE-2026-109833
+Patch8:         0001-vnc-tls-Forward-EINTR-and-ECONTINUE-to-caller.patch
+Patch9:         0002-vnc-tls-Fix-reading-from-within-the-peek-buffer.patch
+
+# Connection throttling timeouts (RHEL-267710)
+Patch10:         throttler-timeout.patch
 
 BuildRequires:  git
 BuildRequires:  gcc
@@ -84,6 +91,18 @@ GNOME desktop environment.
 
 
 %changelog
+* Fri Nov 13 2026 Piyush Bhoot <pbhoot@redhat.com> - 0.1.8-7
+- Correct typo in peek buffer patch
+  Resolves: RHEL-282531
+
+* Mon Nov 09 2026 Jonas Ådahl <jadahl@redhat.com> - 0.1.8-6
+- Backport connection throttling timeouts
+  Resolves: RHEL-267710
+
+* Tue Oct 20 2026 Jonas Ådahl <jadahl@redhat.com> - 0.1.8-5
+- Backport security fixes
+  Resolves: RHEL-282531
+
 * Thu Jul 03 2025 Jonas Ådahl <jadahl@redhat.com> - 0.1.8-4
 - Backport connection throttling
   Resolves: RHEL-92791
